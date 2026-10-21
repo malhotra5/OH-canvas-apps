@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "name": "task-manager",
+  "display_name": "Task Manager",
+  "version": "0.1.0",
+  "description": "Personal daily task manager: Linear + GitHub items, prioritized, one-click OpenHands dispatch.",
+  "icon": "icon.svg",
+  "entrypoint": "extension.js",
+  "contributes": {
+    "pages": [
+      {
+        "id": "app",
+        "title": "Task Manager",
+        "path": "/app",
+        "nav_label": "Task Manager"
+      }
+    ]
+  }
+}
