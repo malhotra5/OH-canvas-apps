@@ -510,7 +510,10 @@ function prRow(item) {
   if (item.state === "draft") meta.append(badge("draft", "draft"));
 
   // CI badge
-  const ciText = item.ci_status === "success" ? "✓ CI passing" : item.ci_status === "failure" ? "✗ CI failing" : "⏳ CI pending";
+  const ciText = item.ci_status === "success" ? "✓ CI passing"
+    : item.ci_status === "failure" ? "✗ CI failing"
+    : item.ci_status === "no_checks" ? "no CI checks"
+    : "⏳ CI pending";
   meta.append(badge(ciText, `ci-${item.ci_status}`));
 
   // Review status badge

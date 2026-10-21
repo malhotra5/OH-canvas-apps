@@ -200,22 +200,24 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
             repo = pr.get("repository", {}).get("nameWithOwner", "")
             number = pr["number"]
 
-            # CI status from last commit
+            # CI status from last commit (statusCheckRollup is null when no checks are configured)
             commits = pr.get("commits", {}).get("nodes", [])
             ci_state = None
             if commits:
-                ci_state = commits[-1].get("commit", {}).get("statusCheckRollup", {}).get("state")
+                rollup = (commits[-1].get("commit") or {}).get("statusCheckRollup")
+                ci_state = rollup.get("state") if rollup else None
 
             # Reviewers: pending requests + completed reviews
+            # (requestedReviewer/author are null for deleted users/bots)
             requested = []
             for node in pr.get("reviewRequests", {}).get("nodes", []):
-                reviewer = node.get("requestedReviewer", {})
+                reviewer = node.get("requestedReviewer") or {}
                 requested.append(reviewer.get("login") or reviewer.get("name") or "unknown")
 
             completed_reviews = []
             for node in pr.get("reviews", {}).get("nodes", []):
                 completed_reviews.append({
-                    "author": node.get("author", {}).get("login", "unknown"),
+                    "author": (node.get("author") or {}).get("login", "unknown"),
                     "state": node.get("state"),
                 })
 
@@ -253,7 +255,7 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
                 "repo": repo,
                 "labels": [],
                 "state": pr.get("isDraft") and "draft" or "open",
-                "ci_status": (ci_state or "PENDING").lower(),
+                "ci_status": (ci_state or "NO_CHECKS").lower(),
                 "review_status": review_status,
                 "reviewers_requested": requested,
                 "reviewers_completed": completed_reviews,
