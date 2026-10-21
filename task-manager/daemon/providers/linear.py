@@ -19,6 +19,7 @@ query AssignedIssues {
         description
         url
         priority
+        createdAt
         updatedAt
         dueDate
         state { name type }
@@ -33,14 +34,14 @@ query AssignedIssues {
 }
 """
 
+# Linear priority enum: 0=No priority, 1=Urgent, 2=High, 3=Medium, 4=Low
 PRIORITY_MAP = {
-    0: 4,  # No priority
-    1: 3,  # Urgent → but Linear uses 1=Urgent
+    0: 4,  # No priority → lowest
+    1: 0,  # Urgent → highest
     2: 1,  # High
     3: 2,  # Medium
     4: 3,  # Low
 }
-# Linear priority enum: 0=No priority, 1=Urgent, 2=High, 3=Medium, 4=Low
 
 
 def fetch_issues(api_key: str) -> list[dict]:
@@ -82,6 +83,7 @@ def fetch_issues(api_key: str) -> list[dict]:
                 "priority_raw": priority_raw,
                 "priority": PRIORITY_MAP.get(priority_raw, 2),
                 "due_date": node.get("dueDate"),
+                "created_at": node.get("createdAt"),
                 "updated_at": node.get("updatedAt"),
                 "assignee": viewer.get("name"),
                 "team": node.get("team", {}).get("key") if node.get("team") else None,

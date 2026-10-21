@@ -28,6 +28,7 @@ query($query: String!) {
           title
           url
           isDraft
+          createdAt
           updatedAt
           repository { nameWithOwner }
           reviewRequests(first: 10) {
@@ -139,6 +140,7 @@ def fetch_issues_and_reviews(token: str, username: str | None = None) -> tuple[l
                 "priority_raw": next((l for l in labels if l.lower() in LABEL_PRIORITY), None),
                 "priority": _priority_from_labels(labels),
                 "due_date": None,
+                "created_at": item.get("created_at"),
                 "updated_at": item.get("updated_at"),
                 "assignee": username,
                 "repo": repo,
@@ -208,6 +210,7 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
                 "body_excerpt": "",
                 "priority": 2,
                 "due_date": None,
+                "created_at": pr.get("createdAt"),
                 "updated_at": pr.get("updatedAt"),
                 "assignee": username,
                 "repo": repo,

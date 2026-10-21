@@ -250,6 +250,9 @@ function sectionHeader(count, label) {
 
 // ── Tasks view (issues + linear, no reviews/prs) ────────────────────────
 
+// ISO date strings compare lexicographically, so descending is just b.localeCompare(a)
+const dateDesc = (a, b) => (b?.created_at || b?.updated_at || "").localeCompare(a?.created_at || a?.updated_at || "");
+
 async function renderTasks(view, host) {
   view.replaceChildren(loadingEl("Fetching tasks…"));
   let data;
@@ -263,7 +266,10 @@ async function renderTasks(view, host) {
   if (errors?.length) frag.append(msgEl("err", errors.map((e) => `${e.source}: ${e.error}`).join("; ")));
 
   // Only show issues and linear items (not reviews or PRs)
-  const filtered = items.filter((i) => i.source === "linear" || i.source === "github-issue");
+  // Sort: priority asc, then most recently opened first
+  const filtered = items
+    .filter((i) => i.source === "linear" || i.source === "github-issue")
+    .sort((a, b) => a.priority - b.priority || dateDesc(a, b));
 
   if (filtered.length === 0) {
     frag.append(emptyEl("No assigned issues found."));
@@ -361,7 +367,9 @@ async function renderReviews(view, host) {
   const frag = document.createDocumentFragment();
   if (errors?.length) frag.append(msgEl("err", errors.map((e) => `${e.source}: ${e.error}`).join("; ")));
 
-  const reviews = items.filter((i) => i.source === "github-review");
+  const reviews = items
+    .filter((i) => i.source === "github-review")
+    .sort(dateDesc); // most recently requested first
   if (reviews.length === 0) {
     frag.append(emptyEl("No pending reviews."));
   } else {
@@ -405,7 +413,9 @@ async function renderPRs(view, host) {
   const frag = document.createDocumentFragment();
   if (errors?.length) frag.append(msgEl("err", errors.map((e) => `${e.source}: ${e.error}`).join("; ")));
 
-  const prs = items.filter((i) => i.source === "github-pr");
+  const prs = items
+    .filter((i) => i.source === "github-pr")
+    .sort(dateDesc); // most recently opened first
   if (prs.length === 0) {
     frag.append(emptyEl("No open PRs."));
   } else {

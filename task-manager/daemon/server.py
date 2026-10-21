@@ -108,6 +108,20 @@ CACHE_TTL_SECONDS = 300
 _cache: dict = {"key": None, "items": [], "errors": None, "fetched_at": 0.0}
 
 
+class _SortDesc:
+    """Wrapper to reverse string comparison for descending sort."""
+    __slots__ = ("v",)
+
+    def __init__(self, v: str):
+        self.v = v
+
+    def __lt__(self, other: "_SortDesc") -> bool:
+        return self.v > other.v
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _SortDesc) and self.v == other.v
+
+
 def _cache_key(linear_key: str | None, gh_key: str | None) -> str:
     return hashlib.sha256(f"{linear_key or ''}|{gh_key or ''}".encode()).hexdigest()
 
@@ -170,9 +184,15 @@ def get_tasks(
     all_items = _cache["items"]
     errors = _cache["errors"]
 
-    # Sort: priority rank, then source rank (reviews first), then updated_at desc
+    # Sort: priority rank asc, then source rank (reviews first), then date desc
     source_rank = {"github-review": 0, "linear": 1, "github-issue": 2, "github-pr": 3}
-    all_items.sort(key=lambda x: (x["priority"], source_rank.get(x["source"], 9), x.get("updated_at") or ""))
+    all_items.sort(
+        key=lambda x: (
+            x["priority"],
+            source_rank.get(x["source"], 9),
+            _SortDesc(x.get("updated_at") or x.get("created_at") or ""),
+        )
+    )
 
     # Attach any saved dispatch state
     dispatches = state.get_all().get("dispatches", {})
