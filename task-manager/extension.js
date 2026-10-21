@@ -1106,13 +1106,18 @@ function prRow(item, host) {
     const linksEl = document.createElement("div");
     linksEl.className = "tm-item-issue-links";
     for (const ref of linked) {
-      const [repoPart, numPart] = ref.ref.includes("/") ? ref.ref.split("#") : [item.repo, ref.number];
       const link = document.createElement("a");
-      link.href = `https://github.com/${repoPart}/issues/${numPart}`;
       link.target = "_blank";
       link.rel = "noopener";
       link.className = ref.closes ? "tm-issue-link closes" : "tm-issue-link";
-      link.textContent = `${ref.closes ? "→ closes" : "→ references"} ${ref.ref}`;
+      if (ref.source === "linear" && ref.url) {
+        link.href = ref.url;
+        link.textContent = `${ref.closes ? "→ closes" : "→ references"} ${ref.ref}`;
+      } else {
+        const [repoPart, numPart] = ref.ref.includes("/") ? ref.ref.split("#") : [item.repo, ref.number];
+        link.href = `https://github.com/${repoPart}/issues/${numPart}`;
+        link.textContent = `${ref.closes ? "→ closes" : "→ references"} ${ref.ref}`;
+      }
       linksEl.append(link);
     }
     body.append(linksEl);

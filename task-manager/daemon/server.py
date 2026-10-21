@@ -412,10 +412,13 @@ def _build_board(items: list[dict]) -> list[dict]:
     # Index tickets for PR ref matching:
     #   "Owner/repo#N" and bare "#N" -> GitHub issues; dispatch linked_prs -> any ticket
     gh_by_ref: dict[str, dict] = {}
+    linear_by_id: dict[str, dict] = {}
     for t in tickets:
         if t["source"] == "github-issue":
             gh_by_ref[f"{t['repo']}#{t['identifier']}"] = t
             gh_by_ref[t["identifier"]] = t
+        elif t["source"] == "linear":
+            linear_by_id[t["identifier"]] = t
     # Linear tickets: index by GitHub attachment URLs (PR or issue links from Linear UI)
     linear_by_pr: dict[tuple, list[dict]] = {}
     linear_by_issue_ref: dict[str, list[dict]] = {}
@@ -450,6 +453,13 @@ def _build_board(items: list[dict]) -> list[dict]:
         matched: list[dict] = []
         seen = set()
         for ref in pr.get("linked_issues", []) or []:
+            # Linear refs: match by identifier (e.g. OSS-14668)
+            if ref.get("source") == "linear":
+                t = linear_by_id.get(ref.get("ref", ""))
+                if t and t["id"] not in seen:
+                    seen.add(t["id"])
+                    matched.append(t)
+                continue
             t = gh_by_ref.get(ref.get("ref", "")) or gh_by_ref.get(str(ref.get("number", "")))
             if t and t["id"] not in seen:
                 seen.add(t["id"])

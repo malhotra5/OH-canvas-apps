@@ -33,10 +33,25 @@ _ISSUE_URL_RE = re.compile(
     r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)",
     re.IGNORECASE,
 )
+# Linear issue URLs: https://linear.app/TEAM/issue/IDENT/TITLE
+_LINEAR_URL_RE = re.compile(
+    r"https?://linear\.app/[A-Za-z0-9_.-]+/issue/([A-Za-z0-9]+-[A-Za-z0-9]+)",
+    re.IGNORECASE,
+)
+# Closing keyword + Linear URL: "Closes https://linear.app/..."
+_CLOSING_LINEAR_RE = re.compile(
+    r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+"
+    r"(https?://linear\.app/[A-Za-z0-9_.-]+/issue/([A-Za-z0-9]+-[A-Za-z0-9]+))",
+    re.IGNORECASE,
+)
 
 
 def _extract_issue_refs(body: str, repo: str) -> list[dict]:
-    """Return unique issue refs from a PR body, tagged by whether they use closing keywords."""
+    """Return unique issue refs from a PR body, tagged by whether they use closing keywords.
+
+    Refs can be GitHub (#N, OWNER/REPO#N, or github.com URLs) or Linear
+    (linear.app/.../issue/IDENT URLs).
+    """
     refs: dict[str, dict] = {}
 
     for match in _CLOSING_RE.finditer(body):
@@ -55,6 +70,19 @@ def _extract_issue_refs(body: str, repo: str) -> list[dict]:
         full = f"{repo_ref}#{num}"
         if full not in refs:
             refs[full] = {"ref": full, "number": num, "closes": False}
+
+    # Linear issue URLs (with or without closing keywords)
+    for match in _CLOSING_LINEAR_RE.finditer(body):
+        url, ident = match.group(1), match.group(2)
+        key = f"linear:{ident}"
+        if key not in refs:
+            refs[key] = {"ref": ident, "number": ident, "closes": True, "source": "linear", "url": url}
+    for match in _LINEAR_URL_RE.finditer(body):
+        ident = match.group(1)
+        url = match.group(0)
+        key = f"linear:{ident}"
+        if key not in refs:
+            refs[key] = {"ref": ident, "number": ident, "closes": False, "source": "linear", "url": url}
 
     return list(refs.values())
 
