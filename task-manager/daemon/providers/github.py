@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import re
 
 GITHUB_API = "https://api.github.com/graphql"
 GITHUB_REST = "https://api.github.com"
@@ -18,6 +19,35 @@ LABEL_PRIORITY = {
 ISSUES_QUERY_REST = "/search/issues?q=assignee:{user}+org:{org}+is:open+type:issue&per_page=50"
 REVIEWS_QUERY_REST = "/search/issues?q=review-requested:{user}+org:{org}+is:open+type:pr&per_page=50"
 
+# Closing keywords per GitHub's linked-issues spec, plus plain mentions.
+# Match "closes #123", "Fixes: OWNER/REPO#456", "resolve #7" (case-insensitive).
+_CLOSING_RE = re.compile(
+    r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+"
+    r"((?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d+))",
+    re.IGNORECASE,
+)
+# Bare " #123 " mentions that aren't preceded by a closing keyword
+_MENTION_RE = re.compile(r"(?:^|[^\w/&-])((?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d+))", re.MULTILINE)
+
+
+def _extract_issue_refs(body: str, repo: str) -> list[dict]:
+    """Return unique issue refs from a PR body, tagged by whether they use closing keywords."""
+    refs: dict[str, dict] = {}
+
+    for match in _CLOSING_RE.finditer(body):
+        ref, num = match.group(1), match.group(2)
+        full = ref if "/" in ref else f"{repo}#{num}"
+        refs[full] = {"ref": full, "number": num, "closes": True}
+
+    for match in _MENTION_RE.finditer(body):
+        ref, num = match.group(1), match.group(2)
+        full = ref if "/" in ref else f"{repo}#{num}"
+        if full not in refs:
+            refs[full] = {"ref": full, "number": num, "closes": False}
+
+    return list(refs.values())
+
+
 PR_GRAPHQL = """
 query($query: String!) {
   search(query: $query, type: ISSUE, first: 50) {
@@ -27,6 +57,7 @@ query($query: String!) {
           number
           title
           url
+          body
           isDraft
           createdAt
           updatedAt
@@ -200,6 +231,11 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
             else:
                 review_status = "no_reviews"
 
+            # Extract issue references from the PR body via GitHub's closing
+            # keywords (closes/fixes/resolves #N or OWNER/REPO#N), plus bare #N mentions
+            body = pr.get("body") or ""
+            linked_issues = _extract_issue_refs(body, repo)
+
             prs.append({
                 "id": f"github-pr:{repo}#{number}",
                 "source": "github-pr",
@@ -207,7 +243,8 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
                 "identifier": str(number),
                 "title": pr["title"],
                 "url": pr["url"],
-                "body_excerpt": "",
+                "body_excerpt": body[:500],
+                "linked_issues": linked_issues,
                 "priority": 2,
                 "due_date": None,
                 "created_at": pr.get("createdAt"),

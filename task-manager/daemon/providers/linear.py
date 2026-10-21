@@ -89,6 +89,7 @@ def fetch_issues(api_key: str) -> list[dict]:
                 "team": node.get("team", {}).get("key") if node.get("team") else None,
                 "labels": [l["name"] for l in node.get("labels", {}).get("nodes", [])],
                 "state": node.get("state", {}).get("name") if node.get("state") else None,
+                "state_type": node.get("state", {}).get("type") if node.get("state") else None,
                 "is_subticket": bool(parent),
                 "parent": (
                     {"identifier": parent["identifier"], "title": parent["title"], "url": parent["url"]}

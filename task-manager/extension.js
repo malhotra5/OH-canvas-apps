@@ -56,6 +56,27 @@ const STYLES = `
 /* Linear relations */
 .tm-item-sub { margin-left: 1.5rem; border-left: 2px solid var(--tm-border); }
 .badge-sub { color: #b8860b; border-color: #b8860b; }
+.badge-inprogress { color: #4caf50; border-color: #4caf50; }
+.badge-no-issue { color: #f85149; border-color: #f85149; }
+
+/* Filter chips */
+.tm-filter-chips { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.tm-chip {
+  padding: 0.25rem 0.75rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--tm-border); background: transparent; color: var(--tm-muted);
+  font-size: 0.75rem; transition: background 0.15s, color 0.15s;
+}
+.tm-chip:hover { color: var(--tm-text); background: rgba(255,255,255,0.05); }
+.tm-chip.active { color: var(--tm-accent); border-color: var(--tm-accent); background: rgba(79,158,255,0.12); }
+
+/* PR → issue links */
+.tm-item-issue-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.25rem; }
+.tm-issue-link {
+  font-size: 0.75rem; color: var(--tm-accent); text-decoration: none;
+  padding: 0.1rem 0.5rem; border: 1px solid var(--tm-border); border-radius: 4px;
+}
+.tm-issue-link:hover { border-color: var(--tm-accent); text-decoration: underline; }
+.tm-issue-link.closes { color: #4caf50; border-color: rgba(76,175,80,0.4); }
 .tm-item-parent { font-size: 0.75rem; color: var(--tm-muted); margin-top: 0.25rem; }
 .tm-item-parent a { color: var(--tm-accent); text-decoration: none; }
 .tm-item-parent a:hover { text-decoration: underline; }
@@ -253,7 +274,37 @@ function sectionHeader(count, label) {
 // ISO date strings compare lexicographically, so descending is just b.localeCompare(a)
 const dateDesc = (a, b) => (b?.created_at || b?.updated_at || "").localeCompare(a?.created_at || a?.updated_at || "");
 
+// In-progress classification: Linear 'started' state type, or any non-closed GitHub issue label heuristics
+const IN_PROGRESS_STATES = ["started", "in progress", "in-progress", "under review"];
+function isInProgress(item) {
+  if (item.source === "linear") return item.state_type === "started";
+  const st = (item.state || "").toLowerCase();
+  return IN_PROGRESS_STATES.some((s) => st.includes(s));
+}
+
+// Filter chip state for the tasks view ("all" | "in-progress" | "not-started")
+let taskFilter = "all";
+
+function filterChips(counts) {
+  const wrap = document.createElement("div");
+  wrap.className = "tm-filter-chips";
+  const chips = [
+    { id: "all", label: `All (${counts.all})` },
+    { id: "in-progress", label: `In progress (${counts.inProgress})` },
+    { id: "not-started", label: `Not started (${counts.notStarted})` },
+  ];
+  for (const c of chips) {
+    const btn = document.createElement("button");
+    btn.className = "tm-chip" + (taskFilter === c.id ? " active" : "");
+    btn.textContent = c.label;
+    btn.addEventListener("click", () => { taskFilter = c.id; renderTasks.lastView?.(); });
+    wrap.append(btn);
+  }
+  return wrap;
+}
+
 async function renderTasks(view, host) {
+  renderTasks.lastView = () => renderTasks(view, host);
   view.replaceChildren(loadingEl("Fetching tasks…"));
   let data;
   try { data = await fetchTasks(host); }
@@ -266,9 +317,18 @@ async function renderTasks(view, host) {
   if (errors?.length) frag.append(msgEl("err", errors.map((e) => `${e.source}: ${e.error}`).join("; ")));
 
   // Only show issues and linear items (not reviews or PRs)
-  // Sort: priority asc, then most recently opened first
-  const filtered = items
-    .filter((i) => i.source === "linear" || i.source === "github-issue")
+  const issues = items.filter((i) => i.source === "linear" || i.source === "github-issue");
+
+  const counts = {
+    all: issues.length,
+    inProgress: issues.filter(isInProgress).length,
+    notStarted: issues.length - issues.filter(isInProgress).length,
+  };
+  frag.append(filterChips(counts));
+
+  // Apply state filter, then sort: priority asc, most recently opened first
+  const filtered = issues
+    .filter((i) => taskFilter === "all" || (taskFilter === "in-progress") === isInProgress(i))
     .sort((a, b) => a.priority - b.priority || dateDesc(a, b));
 
   if (filtered.length === 0) {
@@ -293,8 +353,10 @@ function taskRow(item) {
   const meta = document.createElement("div");
   meta.className = "tm-item-meta";
   if (item.is_subticket) meta.append(badge("sub-issue", "badge-sub"));
+  if (isInProgress(item)) meta.append(badge("in progress", "badge-inprogress"));
   meta.append(badge(item.source.replace("github-", "gh-"), `source-${item.source}`));
   if (item.identifier) meta.append(badge(item.identifier, ""));
+  if (item.state) { const s = document.createElement("span"); s.textContent = `· ${item.state}`; meta.append(s); }
   if (item.repo) { const s = document.createElement("span"); s.textContent = item.repo; meta.append(s); }
   if (item.team) { const s = document.createElement("span"); s.textContent = `· ${item.team}`; meta.append(s); }
   body.append(title, meta);
@@ -477,6 +539,28 @@ function prRow(item) {
   }
 
   body.append(title, meta);
+
+  // Linked issue associations: closing keywords render as "→ closes", bare mentions as "→ references"
+  const linked = item.linked_issues || [];
+  if (linked.length) {
+    const linksEl = document.createElement("div");
+    linksEl.className = "tm-item-issue-links";
+    for (const ref of linked) {
+      const [repoPart, numPart] = ref.ref.includes("/") ? ref.ref.split("#") : [item.repo, ref.number];
+      const link = document.createElement("a");
+      link.href = `https://github.com/${repoPart}/issues/${numPart}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.className = ref.closes ? "tm-issue-link closes" : "tm-issue-link";
+      link.textContent = `${ref.closes ? "→ closes" : "→ references"} ${ref.ref}`;
+      linksEl.append(link);
+    }
+    body.append(linksEl);
+  } else {
+    // Flag PRs with no issue association
+    meta.append(badge("⚠ no linked issue", "badge-no-issue"));
+  }
+
   row.append(dot, body);
   return row;
 }
