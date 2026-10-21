@@ -189,17 +189,19 @@ class PromptStore:
             self._write(DEFAULT_SETS)
             return
         # Migration: merge any default templates missing from an existing store
-        # (user edits win — only adds templates whose ids don't exist yet)
+        # (user edits win — only adds templates whose ids don't exist yet AND
+        #  weren't explicitly deleted by the user)
         try:
             data = json.loads(self.path.read_text())
         except json.JSONDecodeError:
             return
         changed = False
+        deleted_ids = set(data.get("deleted_templates", []))
         default_by_id = {t["id"]: t for t in DEFAULT_SETS["sets"][0]["templates"]}
         for s in data.get("sets", []):
             existing_ids = {t.get("id") for t in s.get("templates", [])}
             for tid, tmpl in default_by_id.items():
-                if tid not in existing_ids:
+                if tid not in existing_ids and tid not in deleted_ids:
                     s.setdefault("templates", []).append(json.loads(json.dumps(tmpl)))
                     changed = True
         # Merge action_map defaults for actions not yet mapped
@@ -301,6 +303,10 @@ class PromptStore:
                 before = len(s.get("templates", []))
                 s["templates"] = [t for t in s.get("templates", []) if t["id"] != template_id]
                 if len(s["templates"]) < before:
+                    # Record the deletion so the migration logic doesn't re-add it
+                    deleted = set(data.get("deleted_templates", []))
+                    deleted.add(template_id)
+                    data["deleted_templates"] = sorted(deleted)
                     self._write(data)
                     return True
         return False
