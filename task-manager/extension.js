@@ -316,10 +316,20 @@ async function fetchBoard(host, { refresh = false } = {}) {
 
 /** Create a Canvas conversation via host.agentServer */
 async function createConversation(host, message, title, agentProfileId = "") {
+  // Pass secrets as LookupSecret references — the server resolves them
+  // by name from its own encrypted store. Plaintext never touches the
+  // frontend, and no secrets_encrypted flag is needed.
+  const secretEntries = {};
+  for (const [provider, secretName] of Object.entries(SECRET_NAMES)) {
+    secretEntries[secretName] = {
+      kind: "LookupSecret",
+      url: `api/settings/secrets/${encodeURIComponent(secretName)}`,
+    };
+  }
   const body = {
     workspace: { kind: "LocalWorkspace", working_dir: "workspace/feedback" },
     worktree: false,
-    secrets_encrypted: true,
+    secrets: secretEntries,
     initial_message: { role: "user", content: [{ type: "text", text: message }], run: true },
     max_iterations: 500,
     autotitle: !title,
