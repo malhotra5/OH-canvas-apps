@@ -301,18 +301,18 @@ def get_state():
     return state.get_all()
 
 
-@app.put("/state/{item_id}/dispatch")
+@app.put("/state/{item_id:path}/dispatch")
 def update_dispatch(item_id: str, req: DispatchUpdate):
     return state.set_dispatch(item_id, req.model_dump(exclude_none=True))
 
 
-@app.post("/state/{item_id}/history")
+@app.post("/state/{item_id:path}/history")
 def add_history(item_id: str, event: str, detail: str = ""):
     state.append_history(item_id, event, detail)
     return {"ok": True}
 
 
-@app.post("/state/{item_id}/linked-prs")
+@app.post("/state/{item_id:path}/linked-prs")
 def add_linked_pr(item_id: str, repo: str, number: int, url: str, pr_state: str = "open"):
     state.add_linked_pr(item_id, repo, number, url, pr_state)
     return {"ok": True}
