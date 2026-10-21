@@ -198,6 +198,83 @@ DEFAULT_SETS = {
                         "the ACTIONS entry and the condition to add in prRow()."
                     ),
                 },
+                {
+                    "id": "guided-review",
+                    "title": "Guided PR walkthrough",
+                    "body": (
+                        "I want you to walk me through {{repo}} PR #{{identifier}} "
+                        "({{url}}: \"{{title}}\") so I can review it myself with full clarity. "
+                        "Do NOT post anything to GitHub and do NOT modify any code - this is a "
+                        "guided, interactive review for me.\n\n"
+                        "Preparation:\n"
+                        "1. Fetch the PR details, the full diff, and the PR description (given "
+                        "below for context):\n{{body}}\n"
+                        "2. Find the linked ticket: look for a closing keyword (\"Closes #N\" or a "
+                        "Linear URL) in the PR description or the PR's linked issues. If it's a "
+                        "GitHub issue, read it; if it's Linear, fetch it via the LINEAR_API_KEY. "
+                        "If there is no linked ticket, say so and reconstruct the intent from the "
+                        "PR description alone.\n"
+                        "3. Check out the PR locally (`gh pr checkout {{identifier}}`) if needed to "
+                        "understand the code in full context.\n\n"
+                        "Then walk me through it step by step:\n"
+                        "- Start with the ticket: what problem is being solved and why.\n"
+                        "- Then the approach: the high-level design of the change and why this "
+                        "route was taken over alternatives.\n"
+                        "- Then the implementation, file by file / commit by commit in logical "
+                        "order: for each significant change, explain what it does, how it works, "
+                        "and how it connects back to the ticket.\n"
+                        "- Call out anything non-obvious: tricky logic, edge cases handled (or "
+                        "missed), new dependencies, and changes that look unrelated to the stated "
+                        "goal.\n\n"
+                        "Finish with an assessment:\n"
+                        "- Pros: what this implementation does well.\n"
+                        "- Cons / risks: bugs, design concerns, maintainability or performance "
+                        "issues, test coverage gaps.\n"
+                        "- Open questions I should ask the author, and what you would want "
+                        "verified before approving.\n\n"
+                        "After presenting all of this, stop and wait. I will ask follow-up "
+                        "questions, request deeper dives into specific files, or tell you how to "
+                        "proceed. Only act further (comments, changes, posting) when I explicitly "
+                        "ask."
+                    ),
+                },
+                {
+                    "id": "auto-review",
+                    "title": "Autonomous PR review",
+                    "body": (
+                        "Perform a code review of {{repo}} PR #{{identifier}} "
+                        "({{url}}: \"{{title}}\") and post the results directly on the GitHub PR. "
+                        "Do not modify the PR's code - review only.\n\n"
+                        "Context (PR description):\n{{body}}\n\n"
+                        "Steps:\n"
+                        "1. Fetch the PR details and the full diff via the GitHub API or "
+                        "`gh pr diff {{identifier}} --repo {{repo}}`. Also read the linked ticket "
+                        "(via closing keywords or linked issues) to understand the intended "
+                        "behavior.\n"
+                        "2. Review the changes for:\n"
+                        "   - Correctness: bugs, logic errors, edge cases, error handling.\n"
+                        "   - Security: injection, secrets, unsafe input handling, permission "
+                        "issues.\n"
+                        "   - Design and maintainability: unnecessary complexity, duplication, "
+                        "misleading names.\n"
+                        "   - Tests: are the changed paths actually tested, and are the tests "
+                        "meaningful (not just mocks of the code under test)?\n"
+                        "   - Compatibility: breaking changes to public APIs or existing "
+                        "behavior.\n"
+                        "3. Use the PR's CI results as evidence - do not flag issues that CI "
+                        "already proves are fine, and do not claim something is broken without "
+                        "checking the logs if CI covers it.\n"
+                        "4. Post the review on GitHub: a summary review (approve if clean, "
+                        "request changes if there are blocking issues, comment otherwise) plus "
+                        "inline comments on the specific lines, each with file + line context and "
+                        "a concrete suggested fix where applicable.\n"
+                        "5. Only report real, material issues - do not pad with nitpicks or "
+                        "style comments that linters/CI would catch.\n\n"
+                        "Report at the end: the review verdict you posted, a list of the inline "
+                        "comments (file:line + one-line summary each), and a link to the review "
+                        "on GitHub."
+                    ),
+                },
             ],
         }
     ],
@@ -208,6 +285,8 @@ DEFAULT_SETS = {
         "resolve-threads": "resolve-threads",
         "resolve-conflicts": "resolve-conflicts",
         "prompt-helper": "prompt-helper",
+        "guided-review": "guided-review",
+        "auto-review": "auto-review",
     },
     # action -> agent profile id (empty string = use the account's active profile)
     "profile_map": {
@@ -216,6 +295,8 @@ DEFAULT_SETS = {
         "resolve-threads": "",
         "resolve-conflicts": "",
         "prompt-helper": "",
+        "guided-review": "",
+        "auto-review": "",
     },
 }
 

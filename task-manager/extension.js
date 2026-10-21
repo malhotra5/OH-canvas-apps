@@ -22,6 +22,8 @@ const ACTIONS = [
   { key: "fix-ci", label: "🔧 Fix failing CI", description: "PR with failing checks — diagnose and fix" },
   { key: "resolve-threads", label: "💬 Resolve review comments", description: "PR with unresolved review threads" },
   { key: "resolve-conflicts", label: "🔀 Resolve merge conflicts", description: "PR with merge conflicts against base branch" },
+  { key: "guided-review", label: "👁 Guided review", description: "Pending review — agent walks me through the PR implementation step by step" },
+  { key: "auto-review", label: "🤖 Autonomous review", description: "Pending review — agent reviews the PR and posts results on GitHub" },
   { key: "prompt-helper", label: "🚀 Launch prompt helper", description: "Prompts page — launches an agent to help write prompt templates" },
 ];
 
@@ -794,12 +796,12 @@ async function renderReviews(view, host) {
     frag.append(emptyEl("No pending reviews."));
   } else {
     frag.append(sectionHeader(reviews.length, "pending reviews"));
-    for (const item of reviews) frag.append(reviewRow(item));
+    for (const item of reviews) frag.append(reviewRow(item, host));
   }
   view.replaceChildren(frag);
 }
 
-function reviewRow(item) {
+function reviewRow(item, host) {
   const row = document.createElement("div");
   row.className = "tm-item";
   const dot = document.createElement("div");
@@ -855,6 +857,75 @@ function reviewRow(item) {
     body.append(linksEl);
   }
 
+  // ── Review action buttons (guided walkthrough / autonomous review) ─
+  const actions = document.createElement("div");
+  actions.className = "tm-actions-row";
+  const msg = document.createElement("span");
+  msg.className = "tm-action-msg";
+  let launched = false;
+  let pendingSave = null;
+
+  function disableAll() {
+    actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  }
+
+  function launch(prom, okText, actionKey, extraVars = {}) {
+    disableAll();
+    pendingSave = (result) => saveDispatch(item, actionKey, result, extraVars);
+    msg.className = "tm-action-msg";
+    msg.textContent = "Launching agent conversation…";
+    prom.then((result) => {
+      msg.className = "tm-action-msg ok";
+      msg.replaceChildren(document.createTextNode(okText + " "));
+      const link = document.createElement("a");
+      link.href = result.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.style.cssText = "color:var(--tm-accent);";
+      link.textContent = "Open →";
+      msg.append(link);
+      launched = true;
+      if (pendingSave) pendingSave(result);
+      setTimeout(() => window.open(result.url, "_blank", "noopener"), 800);
+    }).catch((e) => {
+      msg.className = "tm-action-msg err";
+      msg.textContent = e.message;
+      actions.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    });
+  }
+
+  // Review items only carry body_excerpt; use it as the {{body}} variable.
+  const itemVars = { body: item.body_excerpt || item.body || "" };
+
+  const addReviewBtn = (actionKey, label, okText) => {
+    const btn = document.createElement("button");
+    btn.className = "tm-action-btn";
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      if (launched) return;
+      launch(
+        dispatchPromptForItem(host, item, actionKey, {
+          extraVars: itemVars,
+          title: `${label} — ${item.repo}#${item.identifier}`,
+        }),
+        okText,
+        actionKey,
+        { progress_note: `${label.toLowerCase()} on ${item.repo}#${item.identifier}` },
+      );
+    });
+    actions.append(btn);
+  };
+
+  addReviewBtn("guided-review", "🗣 Guided review", "Guided-review agent launched.");
+  addReviewBtn("auto-review", "🤖 Auto review", "Auto-review agent launched.");
+
+  actions.append(msg);
+  body.append(actions);
+
+  // Agent activity section: shows all conversations (current + history) for this review
+  const activity = renderAgentActivity(item);
+  if (activity) body.append(activity);
+
   row.append(dot, body);
   return row;
 }
@@ -898,6 +969,8 @@ const ACTION_META = {
   "fix-issue": { icon: "📋", label: "Fix issue" },
   "address-review": { icon: "👁", label: "Address review" },
   "triage": { icon: "🔍", label: "Triage" },
+  "guided-review": { icon: "🗣", label: "Guided review" },
+  "auto-review": { icon: "🤖", label: "Auto review" },
 };
 
 function _actionMeta(key) {
