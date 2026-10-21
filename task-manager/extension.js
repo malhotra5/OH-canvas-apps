@@ -567,7 +567,7 @@ function boardCard(group) {
   if (d?.conversation_id) {
     const runs = _allRuns(d);
     const latest = runs[0];
-    const meta = _actionMeta(latest.action);
+    const aMeta = _actionMeta(latest.action);
     const st = _statusMeta(latest.status);
     const agentA = document.createElement("a");
     agentA.href = latest.conversation_url || `/conversations/${latest.conversation_id}`;
@@ -575,8 +575,8 @@ function boardCard(group) {
     const b = document.createElement("span");
     b.className = "tm-board-badge agent";
     b.textContent = runs.length > 1
-      ? `${meta.icon} ${runs.length} runs (${st.label})`
-      : `${meta.icon} ${st.label}`;
+      ? `${aMeta.icon} ${runs.length} runs (${st.label})`
+      : `${aMeta.icon} ${st.label}`;
     b.title = runs.map((r) => `${_actionMeta(r.action).label}: ${r.status}`).join("\n");
     agentA.append(b);
     meta.append(agentA);
