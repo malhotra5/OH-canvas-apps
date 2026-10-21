@@ -454,6 +454,11 @@ def _build_board(items: list[dict]) -> list[dict]:
             if t and t["id"] not in seen:
                 seen.add(t["id"])
                 matched.append(t)
+            # Transitive: Linear ticket → GitHub issue attachment → PR closes that issue
+            for lt in linear_by_issue_ref.get(ref.get("ref", ""), []):
+                if lt["id"] not in seen:
+                    seen.add(lt["id"])
+                    matched.append(lt)
         # Match Linear tickets that have this PR linked as an attachment
         for t in linear_by_pr.get((pr.get("repo", ""), int(pr["identifier"])), []):
             if t["id"] not in seen:
@@ -490,6 +495,14 @@ def _build_board(items: list[dict]) -> list[dict]:
             return False
         return d.get("status") not in ("completed", "failed", "stopped")
 
+    def ticket_under_review(t: dict) -> bool:
+        """A Linear ticket in an 'in review'/'review' state counts as under-review."""
+        if t.get("source") != "linear":
+            return False
+        state = (t.get("state") or "").lower()
+        state_type = (t.get("state_type") or "").lower()
+        return state_type == "review" or "review" in state
+
     groups: list[dict] = []
     for t in tickets:
         linked = prs_by_ticket.get(t["id"], [])
@@ -498,6 +511,9 @@ def _build_board(items: list[dict]) -> list[dict]:
             queue = "under-review"
         elif linked or dispatch_active(t):
             queue = "in-progress"
+        # A Linear ticket in a review state is under-review even without a PR
+        if queue == "todo" and ticket_under_review(t):
+            queue = "under-review"
         groups.append({
             "id": t["id"],
             "queue": queue,
