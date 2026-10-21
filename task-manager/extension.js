@@ -1074,7 +1074,7 @@ async function renderPrompts(view, host) {
           caret.textContent = open ? "▾" : "▸";
         });
 
-        // Editable title + applies_to
+        // Editable title
         const editMeta = document.createElement("div");
         editMeta.style.cssText = "display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;";
         const titleInput = document.createElement("input");
@@ -1082,12 +1082,7 @@ async function renderPrompts(view, host) {
         titleInput.value = tmpl.title;
         titleInput.className = "tm-prompt-field";
         titleInput.placeholder = "Template title";
-        const appliesInput = document.createElement("input");
-        appliesInput.type = "text";
-        appliesInput.value = (tmpl.applies_to || []).join(", ");
-        appliesInput.className = "tm-prompt-field";
-        appliesInput.placeholder = "applies to (csv)";
-        editMeta.append(titleInput, appliesInput);
+        editMeta.append(titleInput);
 
         // Editable body
         const bodyArea = document.createElement("textarea");
@@ -1109,13 +1104,11 @@ async function renderPrompts(view, host) {
           saveBtn.disabled = true;
           statusMsg.textContent = "Saving…";
           try {
-            const appliesTo = appliesInput.value.split(",").map((s) => s.trim()).filter(Boolean);
             await daemonFetch(`/prompts/sets/${set.id}/templates/${tmpl.id}`, {
               method: "PUT",
               body: JSON.stringify({
                 title: titleInput.value.trim() || tmpl.title,
                 body: bodyArea.value,
-                ...(appliesTo.length ? { applies_to: appliesTo } : {}),
               }),
             });
             statusMsg.textContent = "✓ Saved";
@@ -1165,10 +1158,6 @@ async function renderPrompts(view, host) {
     newTitle.type = "text";
     newTitle.placeholder = "Template title";
     newTitle.className = "tm-prompt-field";
-    const newApplies = document.createElement("input");
-    newApplies.type = "text";
-    newApplies.placeholder = "applies to (csv): linear, github-issue, github-review, github-pr";
-    newApplies.className = "tm-prompt-field";
     const newBody = document.createElement("textarea");
     newBody.placeholder = "Prompt body — supports {{title}}, {{url}}, {{repo}}, {{identifier}}, {{body}}, {{source}}, {{state}} and custom vars";
     newBody.className = "tm-prompt-edit";
@@ -1184,7 +1173,7 @@ async function renderPrompts(view, host) {
     const newStatus = document.createElement("span");
     newStatus.style.cssText = "font-size:0.7rem;color:var(--tm-muted);";
     newActions.append(newSaveBtn, newCancelBtn, newStatus);
-    newFields.append(newId, newTitle, newApplies, newBody, newActions);
+    newFields.append(newId, newTitle, newBody, newActions);
     newForm.append(newFields);
 
     newToggle.addEventListener("click", () => {
@@ -1196,7 +1185,7 @@ async function renderPrompts(view, host) {
     newCancelBtn.addEventListener("click", () => {
       newFields.style.display = "none";
       newToggle.textContent = "＋ New template";
-      newId.value = ""; newTitle.value = ""; newApplies.value = ""; newBody.value = ""; newStatus.textContent = "";
+      newId.value = ""; newTitle.value = ""; newBody.value = ""; newStatus.textContent = "";
     });
 
     newSaveBtn.addEventListener("click", async () => {
@@ -1211,13 +1200,11 @@ async function renderPrompts(view, host) {
       newSaveBtn.disabled = true;
       newStatus.textContent = "Creating…";
       try {
-        const appliesTo = newApplies.value.split(",").map((s) => s.trim()).filter(Boolean);
         const created = await daemonFetch(`/prompts/sets/${set.id}/templates`, {
           method: "POST",
           body: JSON.stringify({
             title: newTitle.value.trim(),
             body: newBody.value,
-            ...(appliesTo.length ? { applies_to: appliesTo } : {}),
           }),
         });
         // If the user specified a custom ID, rename the auto-generated one via replace_all

@@ -17,7 +17,6 @@ DEFAULT_SETS = {
                 {
                     "id": "fix-issue",
                     "title": "Fix issue",
-                    "applies_to": ["linear", "github-issue"],
                     "body": (
                         "Resolve {{title}} ({{url}}).\n"
                         "Investigate the issue, implement a fix, and open a pull request.\n\n"
@@ -27,7 +26,6 @@ DEFAULT_SETS = {
                 {
                     "id": "address-review",
                     "title": "Address review",
-                    "applies_to": ["github-review"],
                     "body": (
                         "Address the pending review on {{url}}.\n\n"
                         "Repo: {{repo}} PR #{{identifier}}.\n"
@@ -37,7 +35,6 @@ DEFAULT_SETS = {
                 {
                     "id": "triage",
                     "title": "Triage",
-                    "applies_to": ["linear", "github-issue", "github-review"],
                     "body": (
                         "Investigate {{title}} ({{url}}) and report findings only.\n"
                         "Do not implement yet."
@@ -46,7 +43,6 @@ DEFAULT_SETS = {
                 {
                     "id": "create-ticket",
                     "title": "Create linked ticket",
-                    "applies_to": ["github-pr"],
                     "body": (
                         "The pull request {{url}} ({{repo}} PR #{{identifier}}: \"{{title}}\") has no linked issue.\n\n"
                         "Step 1 — check for an existing ticket first:\n"
@@ -72,7 +68,6 @@ DEFAULT_SETS = {
                 {
                     "id": "fix-ci",
                     "title": "Fix failing CI",
-                    "applies_to": ["github-pr"],
                     "body": (
                         "CI is failing on {{repo}} PR #{{identifier}} ({{url}}: \"{{title}}\").\n\n"
                         "Steps:\n"
@@ -93,7 +88,6 @@ DEFAULT_SETS = {
                 {
                     "id": "resolve-threads",
                     "title": "Resolve review comments",
-                    "applies_to": ["github-pr"],
                     "body": (
                         "There {{count_phrase}} unresolved review comment thread(s) on {{repo}} PR "
                         "#{{identifier}} ({{url}}: \"{{title}}\").\n\n"
@@ -118,7 +112,6 @@ DEFAULT_SETS = {
                 {
                     "id": "prompt-helper",
                     "title": "Prompt helper",
-                    "applies_to": [],
                     "body": (
                         "You are a prompt engineering helper for a personal task manager app.\n\n"
                         "The app fetches Linear issues, GitHub issues, pending reviews, and open PRs "
@@ -131,7 +124,6 @@ DEFAULT_SETS = {
                         "- title: short name\n"
                         "- body: the prompt text (supports variables like title, url, repo, identifier "
                         "written in double-curly syntax)\n"
-                        "- applies_to: array of source types (\"linear\", \"github-issue\", "
                         "\"github-review\", \"github-pr\")\n\n"
                         "Ask me what kind of prompt I want to create, then help me draft it. When "
                         "we're happy with the result, give me the final template in JSON format so "
@@ -235,14 +227,13 @@ class PromptStore:
         self._write(data)
         return len(data["sets"]) < before
 
-    def add_template(self, set_id: str, title: str, body: str, applies_to: list[str] | None = None) -> dict | None:
+    def add_template(self, set_id: str, title: str, body: str) -> dict | None:
         data = self._read()
         for s in data.get("sets", []):
             if s["id"] == set_id:
                 tmpl = {
                     "id": uuid.uuid4().hex[:8],
                     "title": title,
-                    "applies_to": applies_to or [],
                     "body": body,
                 }
                 s.setdefault("templates", []).append(tmpl)
@@ -256,7 +247,7 @@ class PromptStore:
             if s["id"] == set_id:
                 for t in s.get("templates", []):
                     if t["id"] == template_id:
-                        for k in ("title", "body", "applies_to"):
+                        for k in ("title", "body"):
                             if k in fields and fields[k] is not None:
                                 t[k] = fields[k]
                         self._write(data)

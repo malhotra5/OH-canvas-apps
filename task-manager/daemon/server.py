@@ -66,13 +66,11 @@ class SetUpdate(BaseModel):
 class TemplateCreate(BaseModel):
     title: str
     body: str
-    applies_to: list[str] | None = None
 
 
 class TemplateUpdate(BaseModel):
     title: str | None = None
     body: str | None = None
-    applies_to: list[str] | None = None
 
 
 class ActiveSet(BaseModel):
@@ -240,7 +238,7 @@ def delete_set(set_id: str):
 
 @app.post("/prompts/sets/{set_id}/templates")
 def add_template(set_id: str, req: TemplateCreate):
-    result = prompts.add_template(set_id, req.title, req.body, req.applies_to)
+    result = prompts.add_template(set_id, req.title, req.body)
     if not result:
         raise HTTPException(404, "Set not found")
     return result
