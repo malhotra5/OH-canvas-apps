@@ -43,6 +43,78 @@ DEFAULT_SETS = {
                         "Do not implement yet."
                     ),
                 },
+                {
+                    "id": "create-ticket",
+                    "title": "Create linked ticket",
+                    "applies_to": ["github-pr"],
+                    "body": (
+                        "The pull request {{url}} ({{repo}} PR #{{identifier}}: \"{{title}}\") has no linked issue.\n\n"
+                        "Step 1 — check for an existing ticket first:\n"
+                        "  Search the open issues assigned to me (Linear and GitHub) for one that matches "
+                        "this PR's subject matter. Look at Linear (via the LINEAR_API_KEY) and GitHub "
+                        "issues in {{repo}}.\n"
+                        "  If you find a suitable existing issue, do NOT create anything — just link the "
+                        "PR to it: edit the PR description to append \"\\nCloses #<number>\" (or the "
+                        "Linear issue URL prefixed with a closing keyword), then report what you linked.\n\n"
+                        "Step 2 — if no existing issue matches, create a new ticket:\n"
+                        "  Target tracker: {{tracker}}\n"
+                        "  - If \"linear\": create the issue directly in Linear using the LINEAR_API_KEY. "
+                        "Write a clear title and description distilled from the PR's purpose, then link "
+                        "the PR to it via a closing keyword in the PR description.\n"
+                        "  - If \"github\": create a GitHub issue in {{repo}} (the repo syncs issues to "
+                        "Linear automatically). Title and description should distill the PR's purpose, "
+                        "then link the PR to it via \"Closes #<number>\" in the PR description.\n\n"
+                        "PR description/body for context:\n{{body}}\n\n"
+                        "Report at the end: which ticket you linked or created (with its URL and number), "
+                        "and paste the updated PR description section."
+                    ),
+                },
+                {
+                    "id": "fix-ci",
+                    "title": "Fix failing CI",
+                    "applies_to": ["github-pr"],
+                    "body": (
+                        "CI is failing on {{repo}} PR #{{identifier}} ({{url}}: \"{{title}}\").\n\n"
+                        "Steps:\n"
+                        "1. Identify the failing checks: read the PR's status/check-runs (via the GitHub "
+                        "API or `gh pr checks {{identifier}} --repo {{repo}}`), then pull the failing "
+                        "job logs to find the actual error.\n"
+                        "2. Determine whether the failure is caused by this PR's changes or by flaky/"
+                        "unrelated infrastructure. If it looks flaky, try re-running the failed jobs once "
+                        "before changing code.\n"
+                        "3. Fix the root cause in the PR's branch: check out the branch, implement the "
+                        "fix, and push to the same branch.\n"
+                        "4. Watch the checks until they pass.\n\n"
+                        "PR description/body for context:\n{{body}}\n\n"
+                        "Report at the end: the failing check name(s), root cause, what you changed "
+                        "(files + commit SHA), and the final CI state."
+                    ),
+                },
+                {
+                    "id": "resolve-threads",
+                    "title": "Resolve review comments",
+                    "applies_to": ["github-pr"],
+                    "body": (
+                        "There {{count_phrase}} unresolved review comment thread(s) on {{repo}} PR "
+                        "#{{identifier}} ({{url}}: \"{{title}}\").\n\n"
+                        "Steps:\n"
+                        "1. Fetch all review threads and their comments (via the GitHub API or "
+                        "`gh api` GraphQL reviewThreads) and read each unresolved comment carefully.\n"
+                        "2. For each unresolved thread, critically evaluate the feedback:\n"
+                        "   - If it points at a real bug or a meaningful improvement, implement the fix "
+                        "in the PR branch and push.\n"
+                        "   - If it adds verbosity without clear benefit, over-engineers, or contradicts "
+                        "the project's pragmatic approach, respectfully decline in a reply explaining "
+                        "the reasoning.\n"
+                        "3. Reply to every unresolved thread, then resolve it via the GraphQL API "
+                        "(resolveReviewThread mutation). Only resolve threads after fixing or clearly "
+                        "declining with a rationale.\n"
+                        "4. If changes were pushed, watch CI until it finishes.\n\n"
+                        "PR description/body for context:\n{{body}}\n\n"
+                        "Report at the end: per-thread outcome (fixed with commit SHA, or declined with "
+                        "reason), and how many threads remain unresolved (should be 0)."
+                    ),
+                },
             ],
         }
     ],
@@ -63,6 +135,23 @@ class PromptStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self._write(DEFAULT_SETS)
+            return
+        # Migration: merge any default templates missing from an existing store
+        # (user edits win — only adds templates whose ids don't exist yet)
+        try:
+            data = json.loads(self.path.read_text())
+        except json.JSONDecodeError:
+            return
+        changed = False
+        default_by_id = {t["id"]: t for t in DEFAULT_SETS["sets"][0]["templates"]}
+        for s in data.get("sets", []):
+            existing_ids = {t.get("id") for t in s.get("templates", [])}
+            for tid, tmpl in default_by_id.items():
+                if tid not in existing_ids:
+                    s.setdefault("templates", []).append(json.loads(json.dumps(tmpl)))
+                    changed = True
+        if changed:
+            self._write(data)
 
     def _read(self) -> dict:
         try:

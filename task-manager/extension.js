@@ -63,6 +63,33 @@ const STYLES = `
 .badge-unresolved { color: var(--tm-danger); border-color: var(--tm-danger); }
 .badge-resolved { color: var(--tm-success); border-color: var(--tm-success); }
 
+/* PR action buttons + prompt editing */
+.tm-btn-sm { padding: 0.25rem 0.6rem; font-size: 0.7rem; }
+.tm-prompt-edit {
+  width: 100%; margin-top: 0.4rem; padding: 0.5rem; font-size: 0.72rem; font-family: inherit;
+  background: var(--tm-card); color: var(--tm-text); border: 1px solid var(--tm-border);
+  border-radius: 6px; resize: vertical; box-sizing: border-box;
+}
+.tm-actions-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; align-items: center; }
+.tm-action-btn {
+  padding: 0.25rem 0.7rem; font-size: 0.72rem; font-weight: 500; border: 1px solid var(--tm-border);
+  border-radius: 12px; background: transparent; color: var(--tm-muted); cursor: pointer; transition: all 0.15s;
+}
+.tm-action-btn:hover { color: var(--tm-text); border-color: var(--tm-accent); }
+.tm-action-btn:disabled { opacity: 0.4; cursor: default; }
+.tm-action-msg { font-size: 0.7rem; color: var(--tm-muted); }
+.tm-action-msg.ok { color: var(--tm-success); }
+.tm-action-msg.err { color: var(--tm-danger); }
+.tm-tracker-choice {
+  display: flex; gap: 0.5rem; align-items: center; margin-top: 0.4rem;
+  font-size: 0.72rem; color: var(--tm-muted);
+}
+.tm-tracker-choice button {
+  padding: 0.2rem 0.6rem; font-size: 0.7rem; border: 1px solid var(--tm-border);
+  border-radius: 12px; background: transparent; color: var(--tm-muted); cursor: pointer;
+}
+.tm-tracker-choice button:hover { color: var(--tm-accent); border-color: var(--tm-accent); }
+
 /* Filter chips */
 .tm-filter-chips { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
 .tm-chip {
@@ -249,6 +276,39 @@ async function createConversation(host, message, title) {
     } catch {}
   }
   return { id: convId, url: `/conversations/${convId}` };
+}
+
+/**
+ * Render a prompt template ({{var}} substitution) + dispatch an agent conversation for an item.
+ * Loads the active prompt set from the daemon, finds the template by id, renders it
+ * with the item's fields, and creates a Canvas conversation that runs it.
+ */
+async function dispatchPromptForItem(host, item, templateId, { extraVars = {}, title = "", tracker = null } = {}) {
+  const data = await daemonFetch("/prompts");
+  const activeSet = (data.sets || []).find((s) => s.id === data.active_set_id) || (data.sets || [])[0];
+  const tmpl = (activeSet?.templates || []).find((t) => t.id === templateId);
+  if (!tmpl) throw new Error(`Prompt template "${templateId}" not found in active set "${activeSet?.name}"`);
+
+  // Variables available to templates
+  const vars = {
+    title: item.title || "",
+    url: item.url || "",
+    repo: item.repo || "",
+    identifier: item.identifier || "",
+    body: item.body || "",
+    source: item.source,
+    state: item.state || "",
+    ...extraVars,
+  };
+  if (tracker) vars.tracker = tracker;
+
+  // Render {{var}} placeholders
+  let rendered = tmpl.body;
+  for (const [k, v] of Object.entries(vars)) {
+    rendered = rendered.split(`{{${k}}}`).join(String(v));
+  }
+
+  return createConversation(host, rendered, title);
 }
 
 // ── Shared render helpers ───────────────────────────────────────────────
@@ -513,12 +573,12 @@ async function renderPRs(view, host) {
     frag.append(emptyEl("No open PRs."));
   } else {
     frag.append(sectionHeader(prs.length, "open PRs"));
-    for (const item of prs) frag.append(prRow(item));
+    for (const item of prs) frag.append(prRow(item, host));
   }
   view.replaceChildren(frag);
 }
 
-function prRow(item) {
+function prRow(item, host) {
   const row = document.createElement("div");
   row.className = "tm-item";
   const dot = document.createElement("div");
@@ -603,6 +663,116 @@ function prRow(item) {
   }
 
   row.append(dot, body);
+
+  // ── Status-driven action buttons ──────────────────────────────────
+  const actions = document.createElement("div");
+  actions.className = "tm-actions-row";
+  const msg = document.createElement("span");
+  msg.className = "tm-action-msg";
+  let launched = false;
+
+  function disableAll() {
+    actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  }
+
+  function launch(prom, okText) {
+    disableAll();
+    msg.className = "tm-action-msg";
+    msg.textContent = "Launching agent conversation…";
+    prom.then((result) => {
+      msg.className = "tm-action-msg ok";
+      msg.replaceChildren(document.createTextNode(okText + " "));
+      const link = document.createElement("a");
+      link.href = result.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.style.cssText = "color:var(--tm-accent);";
+      link.textContent = "Open →";
+      msg.append(link);
+      launched = true;
+      // navigate to the conversation after a beat
+      setTimeout(() => host.navigate(result.url), 800);
+    }).catch((e) => {
+      msg.className = "tm-action-msg err";
+      msg.textContent = e.message;
+      actions.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    });
+  }
+
+  // 1) No linked issue → create-ticket (with tracker choice)
+  if (!linked.length) {
+    const btn = document.createElement("button");
+    btn.className = "tm-action-btn";
+    btn.textContent = "🎫 Create ticket";
+    btn.addEventListener("click", () => {
+      if (launched) return;
+      // Replace the button row with the tracker choice UI
+      actions.replaceChildren();
+      const choice = document.createElement("div");
+      choice.className = "tm-tracker-choice";
+      const label = document.createElement("span");
+      label.textContent = "Where should the ticket go?";
+      const linBtn = document.createElement("button");
+      linBtn.textContent = "Linear only";
+      const ghBtn = document.createElement("button");
+      ghBtn.textContent = "GitHub (auto-syncs to Linear)";
+      choice.append(label, linBtn, ghBtn);
+      actions.append(choice, msg);
+      const pick = (tracker) => {
+        launch(
+          dispatchPromptForItem(host, item, "create-ticket", {
+            tracker,
+            title: `🎫 Create ticket for ${item.repo}#${item.identifier}`,
+          }),
+          "Ticket agent launched.",
+        );
+      };
+      linBtn.addEventListener("click", () => pick("linear"));
+      ghBtn.addEventListener("click", () => pick("github"));
+    });
+    actions.append(btn);
+  }
+
+  // 2) CI failing → fix-ci
+  if (item.ci_status === "failure") {
+    const btn = document.createElement("button");
+    btn.className = "tm-action-btn";
+    btn.textContent = "🔧 Fix CI";
+    btn.addEventListener("click", () => {
+      if (launched) return;
+      launch(
+        dispatchPromptForItem(host, item, "fix-ci", {
+          title: `🔧 Fix CI on ${item.repo}#${item.identifier}`,
+        }),
+        "CI-fix agent launched.",
+      );
+    });
+    actions.append(btn);
+  }
+
+  // 3) Unresolved review threads → resolve-threads
+  if (item.unresolved_threads > 0) {
+    const btn = document.createElement("button");
+    btn.className = "tm-action-btn";
+    btn.textContent = `💬 Resolve ${item.unresolved_threads} thread${item.unresolved_threads > 1 ? "s" : ""}`;
+    btn.addEventListener("click", () => {
+      if (launched) return;
+      launch(
+        dispatchPromptForItem(host, item, "resolve-threads", {
+          extraVars: { count_phrase: `are ${item.unresolved_threads}` },
+          title: `💬 Resolve review threads on ${item.repo}#${item.identifier}`,
+        }),
+        "Thread-resolver agent launched.",
+      );
+    });
+    actions.append(btn);
+  }
+
+  if (actions.childElementCount > 0) {
+    actions.append(msg);
+    body.append(actions);
+  }
+
   return row;
 }
 
@@ -782,15 +952,53 @@ async function renderPrompts(view, host) {
         const row = document.createElement("div");
         row.style.cssText = "padding:0.5rem 0;border-bottom:1px solid var(--tm-border);font-size:0.8rem;";
         const name = document.createElement("div");
+        name.style.cssText = "display:flex;align-items:center;gap:0.5rem;";
         name.style.fontWeight = "500";
         name.textContent = tmpl.title;
         const applies = document.createElement("div");
         applies.style.cssText = "font-size:0.7rem;color:var(--tm-muted);margin-top:0.2rem;";
         applies.textContent = `applies to: ${(tmpl.applies_to || []).join(", ") || "all"}`;
-        const body = document.createElement("pre");
-        body.style.cssText = "font-size:0.7rem;color:var(--tm-muted);margin-top:0.3rem;white-space:pre-wrap;";
-        body.textContent = tmpl.body;
-        row.append(name, applies, body);
+
+        // Editable template body + save
+        const bodyArea = document.createElement("textarea");
+        bodyArea.className = "tm-prompt-edit";
+        bodyArea.value = tmpl.body;
+        bodyArea.rows = Math.min(12, Math.max(4, Math.ceil(tmpl.body.length / 60)));
+
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex;gap:0.5rem;margin-top:0.4rem;align-items:center;";
+        const saveBtn = document.createElement("button");
+        saveBtn.className = "tm-btn tm-btn-sm";
+        saveBtn.textContent = "Save";
+        const resetBtn = document.createElement("button");
+        resetBtn.className = "tm-btn tm-btn-secondary tm-btn-sm";
+        resetBtn.textContent = "Reset";
+        const statusMsg = document.createElement("span");
+        statusMsg.style.cssText = "font-size:0.7rem;color:var(--tm-muted);";
+        actions.append(saveBtn, resetBtn, statusMsg);
+
+        saveBtn.addEventListener("click", async () => {
+          saveBtn.disabled = true;
+          statusMsg.textContent = "Saving…";
+          try {
+            await daemonFetch(`/prompts/sets/${set.id}/templates/${tmpl.id}`, {
+              method: "PUT",
+              body: JSON.stringify({ body: bodyArea.value }),
+            });
+            statusMsg.textContent = "✓ Saved";
+            setTimeout(() => { statusMsg.textContent = ""; }, 2500);
+          } catch (e) {
+            statusMsg.textContent = `✗ ${e.message}`;
+          }
+          saveBtn.disabled = false;
+        });
+        resetBtn.addEventListener("click", () => {
+          bodyArea.value = tmpl.body;
+          statusMsg.textContent = "reverted";
+          setTimeout(() => { statusMsg.textContent = ""; }, 2500);
+        });
+
+        row.append(name, applies, bodyArea, actions);
         card.append(row);
       }
     } else {
