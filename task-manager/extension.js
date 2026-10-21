@@ -384,6 +384,29 @@ async function dispatchPromptForItem(host, item, actionKey, { extraVars = {}, ti
   return createConversation(host, rendered, title, agentProfileId);
 }
 
+/**
+ * Persist a dispatched action to the daemon's durable state.json so the
+ * conversation ID / link survives page reloads. Best-effort: failures are
+ * logged but never block the UI.
+ */
+async function saveDispatch(item, actionKey, result, extra = {}) {
+  try {
+    await daemonFetch(`/state/${encodeURIComponent(item.id)}/dispatch`, {
+      method: "PUT",
+      body: JSON.stringify({
+        conversation_id: result.id,
+        conversation_url: result.url,
+        status: "running",
+        action: actionKey,
+        ...extra,
+      }),
+    });
+    item.dispatch = { ...(item.dispatch || {}), conversation_id: result.id, conversation_url: result.url, status: "running", action: actionKey, ...extra };
+  } catch (e) {
+    console.warn("task-manager: failed to persist dispatch", e);
+  }
+}
+
 // ── Shared render helpers ───────────────────────────────────────────────
 
 function loadingEl(text) { const el = document.createElement("div"); el.className = "tm-loading"; el.textContent = text; return el; }
@@ -505,7 +528,7 @@ function boardCard(group) {
   meta.className = "tm-board-card-meta";
   if (main.repo) { const s = document.createElement("span"); s.textContent = main.repo; meta.append(s); }
 
-  // Active agent conversation badge
+  // Active agent conversation badge (durable state, survives reloads)
   const d = main.dispatch;
   if (d?.conversation_id) {
     const agentA = document.createElement("a");
@@ -514,8 +537,15 @@ function boardCard(group) {
     const b = document.createElement("span");
     b.className = "tm-board-badge agent";
     b.textContent = `agent: ${d.status || "running"}`;
+    b.title = `Action: ${d.action || "unknown"}`;
     agentA.append(b);
     meta.append(agentA);
+    // Past actions on this item
+    for (const h of d.action_history || []) {
+      const s = document.createElement("span");
+      s.textContent = `↳ ${h.action} (${h.status})`;
+      meta.append(s);
+    }
   }
 
   // Linked PR rows (implementation of the ticket)
@@ -548,10 +578,13 @@ function boardCard(group) {
 
 async function renderBoard(view, host) {
   renderBoard.lastView = () => renderBoard(view, host);
-  view.replaceChildren(loadingEl("Fetching board…"));
+  // Phase 1: fetching from providers
+  view.replaceChildren(loadingEl("Fetching board from Linear & GitHub…"));
   let data;
   try { data = await fetchBoard(host); }
   catch (e) { view.replaceChildren(errorEl("Cannot reach the task daemon. Is it running on port 7420?", e.message)); return; }
+  // Phase 2: merging saved local state (dispatch/conversation map)
+  view.replaceChildren(loadingEl("Syncing local conversation state…"));
 
   const { groups = [], errors, message } = data;
   if (message) { view.replaceChildren(msgEl("info", message), emptyEl("Configure your API keys in the Settings tab to see tasks.")); return; }
@@ -794,10 +827,14 @@ function reviewRow(item) {
 // ── PRs view ────────────────────────────────────────────────────────────
 
 async function renderPRs(view, host) {
-  view.replaceChildren(loadingEl("Fetching PRs…"));
+  renderPRs.lastView = () => renderPRs(view, host);
+  // Phase 1: fetching from GitHub
+  view.replaceChildren(loadingEl("Fetching PRs from GitHub…"));
   let data;
   try { data = await fetchTasks(host); }
   catch (e) { view.replaceChildren(errorEl("Cannot reach the task daemon.", e.message)); return; }
+  // Phase 2: merging saved local state (dispatch/conversation map)
+  view.replaceChildren(loadingEl("Syncing local conversation state…"));
 
   const { items = [], errors, message } = data;
   if (message) { view.replaceChildren(msgEl("info", message), emptyEl("Configure your API keys in Settings.")); return; }
@@ -835,6 +872,17 @@ function prRow(item, host) {
   const meta = document.createElement("div");
   meta.className = "tm-item-meta";
   meta.append(badge("PR", "source-github-pr"));
+
+  // Previously dispatched conversation on this item (from durable state)
+  if (item.dispatch?.conversation_id) {
+    const convoA = document.createElement("a");
+    convoA.href = item.dispatch.conversation_url || `/conversations/${item.dispatch.conversation_id}`;
+    convoA.target = "_blank";
+    convoA.rel = "noopener";
+    convoA.append(badge(`🤖 agent: ${item.dispatch.status || "running"}`, "badge-state-in-progress"));
+    convoA.title = `Action: ${item.dispatch.action || "unknown"}`;
+    meta.append(convoA);
+  }
   if (item.identifier) meta.append(badge(`#${item.identifier}`, ""));
   if (item.repo) { const s = document.createElement("span"); s.textContent = item.repo; meta.append(s); }
   if (item.state === "draft") meta.append(badge("draft", "draft"));
@@ -909,13 +957,15 @@ function prRow(item, host) {
   const msg = document.createElement("span");
   msg.className = "tm-action-msg";
   let launched = false;
+  let pendingSave = null;
 
   function disableAll() {
     actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
   }
 
-  function launch(prom, okText) {
+  function launch(prom, okText, actionKey, extraVars = {}) {
     disableAll();
+    pendingSave = (result) => saveDispatch(item, actionKey, result, extraVars);
     msg.className = "tm-action-msg";
     msg.textContent = "Launching agent conversation…";
     prom.then((result) => {
@@ -929,6 +979,8 @@ function prRow(item, host) {
       link.textContent = "Open →";
       msg.append(link);
       launched = true;
+      // Persist the action so the convo link survives reloads
+      if (pendingSave) pendingSave(result);
       // navigate to the conversation after a beat
       setTimeout(() => host.navigate(result.url), 800);
     }).catch((e) => {
@@ -964,6 +1016,8 @@ function prRow(item, host) {
             title: `🎫 Create ticket for ${item.repo}#${item.identifier}`,
           }),
           "Ticket agent launched.",
+          "create-ticket",
+          { progress_note: `create ticket on ${tracker}` },
         );
       };
       linBtn.addEventListener("click", () => pick("linear"));
@@ -984,6 +1038,8 @@ function prRow(item, host) {
           title: `🔧 Fix CI on ${item.repo}#${item.identifier}`,
         }),
         "CI-fix agent launched.",
+        "fix-ci",
+        { progress_note: `fix CI on ${item.repo}#${item.identifier}` },
       );
     });
     actions.append(btn);
@@ -1002,6 +1058,8 @@ function prRow(item, host) {
           title: `💬 Resolve review threads on ${item.repo}#${item.identifier}`,
         }),
         "Thread-resolver agent launched.",
+        "resolve-threads",
+        { progress_note: `resolve ${item.unresolved_threads} review threads on ${item.repo}#${item.identifier}` },
       );
     });
     actions.append(btn);

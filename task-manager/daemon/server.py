@@ -94,6 +94,7 @@ class DispatchUpdate(BaseModel):
     conversation_id: str
     conversation_url: str | None = None
     status: str = "running"
+    action: str | None = None
     prompt_set_id: str | None = None
     prompt_template_id: str | None = None
     progress_note: str | None = None

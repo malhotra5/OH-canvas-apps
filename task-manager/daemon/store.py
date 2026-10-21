@@ -40,6 +40,16 @@ class StateStore:
         data = self._read()
         dispatches = data.setdefault("dispatches", {})
         existing = dispatches.get(item_id, {})
+        # Starting a new action for this item: append to the action history
+        if dispatch.get("action") and dispatch["action"] != existing.get("action"):
+            history = existing.setdefault("action_history", [])
+            history.append({
+                "action": dispatch["action"],
+                "conversation_id": dispatch.get("conversation_id", ""),
+                "conversation_url": dispatch.get("conversation_url"),
+                "status": dispatch.get("status", "running"),
+                "started_at": _now(),
+            })
         existing.update(dispatch)
         existing["last_checked_at"] = _now()
         dispatches[item_id] = existing
