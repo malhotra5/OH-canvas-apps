@@ -163,6 +163,8 @@ def fetch_issues_and_reviews(token: str, username: str | None = None) -> tuple[l
         for item in reviews_data.get("items", []):
             repo = item.get("repository_url", "").split("repos/")[-1]
             labels = [l["name"] for l in item.get("labels", [])]
+            body = item.get("body") or ""
+            linked_issues = _extract_issue_refs(body, repo)
             reviews.append({
                 "id": f"github-review:{repo}#{item['number']}",
                 "source": "github-review",
@@ -170,7 +172,7 @@ def fetch_issues_and_reviews(token: str, username: str | None = None) -> tuple[l
                 "identifier": str(item["number"]),
                 "title": item["title"],
                 "url": item["html_url"],
-                "body_excerpt": (item.get("body") or "")[:500],
+                "body_excerpt": body[:500],
                 "priority_raw": next((l for l in labels if l.lower() in LABEL_PRIORITY), None),
                 "priority": _priority_from_labels(labels),
                 "due_date": None,
@@ -180,7 +182,51 @@ def fetch_issues_and_reviews(token: str, username: str | None = None) -> tuple[l
                 "repo": repo,
                 "labels": labels,
                 "state": item.get("state"),
+                "linked_issues": linked_issues,
             })
+
+        # Cross-reference linked issues against fetched GitHub issues to
+        # populate priority + title for each review's linked issue
+        issue_map: dict[str, dict] = {}
+        for iss in issues:
+            issue_map[f"{iss['repo']}#{iss['identifier']}"] = iss
+            # Also index by bare #number for same-repo refs
+            issue_map[iss["identifier"]] = iss
+
+        # Fetch linked issues not in the issue_map directly from the API
+        missing_refs: dict[str, list[dict]] = {}
+        for rev in reviews:
+            for ref in rev.get("linked_issues", []):
+                if ref["ref"] not in issue_map and ref["number"] not in issue_map:
+                    missing_refs.setdefault(ref["ref"], []).append(ref)
+
+        for ref_str, refs in missing_refs.items():
+            # ref_str is like "Owner/repo#123" or "repo#123"
+            try:
+                repo_part = ref_str.split("#")[0]
+                num = ref_str.split("#")[1]
+                issue_data = _rest_get(client, token, f"/repos/{repo_part}/issues/{num}")
+                labels = [l["name"] for l in issue_data.get("labels", [])]
+                for ref in refs:
+                    ref["title"] = issue_data["title"]
+                    ref["url"] = issue_data["html_url"]
+                    ref["priority"] = _priority_from_labels(labels)
+                    ref["priority_raw"] = next((l for l in labels if l.lower() in LABEL_PRIORITY), None)
+            except Exception:
+                pass  # leave unresolved refs as-is
+
+        for rev in reviews:
+            for ref in rev.get("linked_issues", []):
+                linked = issue_map.get(ref["ref"]) or issue_map.get(ref["number"]) or ref
+                if "priority" in linked and linked.get("priority") is not None:
+                    ref["title"] = linked.get("title", ref.get("title"))
+                    ref["url"] = linked.get("url", ref.get("url"))
+                    ref["priority"] = linked["priority"]
+                    ref["priority_raw"] = linked.get("priority_raw")
+                    # Best (lowest = most urgent) linked-issue priority becomes the review's sort priority
+                    rev_p = rev.get("linked_issue_priority")
+                    linked_p = linked["priority"]
+                    rev["linked_issue_priority"] = min(rev_p, linked_p) if rev_p is not None else linked_p
 
     return issues, reviews
 

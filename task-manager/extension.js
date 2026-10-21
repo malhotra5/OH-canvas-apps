@@ -144,6 +144,11 @@ const STYLES = `
 .tm-item-gh-links { margin-top: 0.25rem; }
 .tm-item-gh-links a { display: inline-block; font-size: 0.75rem; color: #8b949e; text-decoration: none; margin-right: 0.75rem; }
 .tm-item-gh-links a:hover { color: var(--tm-accent); text-decoration: underline; }
+.tm-item-issue-links { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-top: 0.3rem; font-size: 0.72rem; }
+.tm-issue-link { color: var(--tm-accent); text-decoration: none; }
+.tm-issue-link:hover { text-decoration: underline; }
+.tm-issue-link.closes { font-weight: 600; }
+.tm-priority-badge { color: #fff; padding: 0.05rem 0.35rem; border-radius: 3px; font-size: 0.65rem; font-weight: 700; }
 
 .tm-item {
   display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem 1rem;
@@ -548,9 +553,16 @@ async function renderReviews(view, host) {
   const frag = document.createDocumentFragment();
   if (errors?.length) frag.append(msgEl("err", errors.map((e) => `${e.source}: ${e.error}`).join("; ")));
 
+  // Sort: linked-issue priority first (lower = more urgent), then recency
+  const reviewSort = (a, b) => {
+    const pa = a.linked_issue_priority ?? 99;
+    const pb = b.linked_issue_priority ?? 99;
+    if (pa !== pb) return pa - pb;
+    return dateDesc(a, b);
+  };
   const reviews = items
     .filter((i) => i.source === "github-review")
-    .sort(dateDesc); // most recently requested first
+    .sort(reviewSort);
   if (reviews.length === 0) {
     frag.append(emptyEl("No pending reviews."));
   } else {
@@ -564,7 +576,10 @@ function reviewRow(item) {
   const row = document.createElement("div");
   row.className = "tm-item";
   const dot = document.createElement("div");
-  dot.className = "tm-item-dot tm-priority-2";
+  // Color dot by linked-issue priority (if any), else default to neutral
+  const p = item.linked_issue_priority ?? 2;
+  const dotClass = `tm-priority-${Math.min(p, 4)}`;
+  dot.className = `tm-item-dot ${dotClass}`;
   const body = document.createElement("div");
   body.className = "tm-item-body";
   const title = document.createElement("div");
@@ -576,6 +591,43 @@ function reviewRow(item) {
   if (item.identifier) meta.append(badge(item.identifier, ""));
   if (item.repo) { const s = document.createElement("span"); s.textContent = item.repo; meta.append(s); }
   body.append(title, meta);
+
+  // Linked GitHub issues with priority badges
+  const linked = item.linked_issues || [];
+  if (linked.length) {
+    const linksEl = document.createElement("div");
+    linksEl.className = "tm-item-issue-links";
+    for (const ref of linked) {
+      const link = document.createElement("a");
+      link.href = ref.url || `https://github.com/${item.repo}/issues/${ref.number}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.className = ref.closes ? "tm-issue-link closes" : "tm-issue-link";
+      link.textContent = `${ref.closes ? "→ closes" : "→ references"} ${ref.ref}`;
+      linksEl.append(link);
+
+      // Priority badge if we resolved the linked issue's priority
+      if (ref.priority != null) {
+        const labels = { 0: "P0", 1: "P1", 2: "P2", 3: "P3", 4: "P4" };
+        const pClass = `tm-priority-${Math.min(ref.priority, 4)}`;
+        const pBadge = document.createElement("span");
+        pBadge.className = `tm-badge tm-priority-badge ${pClass}`;
+        pBadge.textContent = labels[ref.priority] || `P${ref.priority}`;
+        if (ref.priority_raw) pBadge.title = ref.priority_raw;
+        linksEl.append(pBadge);
+      }
+
+      // Title of the linked issue (if resolved from fetched issues)
+      if (ref.title) {
+        const t = document.createElement("span");
+        t.style.cssText = "font-size:0.68rem;color:var(--tm-muted);margin-left:0.25rem;";
+        t.textContent = ref.title;
+        linksEl.append(t);
+      }
+    }
+    body.append(linksEl);
+  }
+
   row.append(dot, body);
   return row;
 }
