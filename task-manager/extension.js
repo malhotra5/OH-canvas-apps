@@ -60,6 +60,8 @@ const STYLES = `
 .badge-state-in-progress { color: var(--tm-warn); border-color: var(--tm-warn); }
 .badge-state-under-review { color: var(--tm-success); border-color: var(--tm-success); }
 .badge-no-issue { color: #f85149; border-color: #f85149; }
+.badge-unresolved { color: var(--tm-danger); border-color: var(--tm-danger); }
+.badge-resolved { color: var(--tm-success); border-color: var(--tm-success); }
 
 /* Filter chips */
 .tm-filter-chips { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
@@ -555,6 +557,13 @@ function prRow(item) {
     no_reviews: "No reviews yet",
   }[rs] || rs;
   meta.append(badge(rsText, `review-${rs}`));
+
+  // Unresolved review comment threads
+  if (item.unresolved_threads > 0) {
+    meta.append(badge(`💬 ${item.unresolved_threads} unresolved`, "badge-unresolved"));
+  } else if ((item.reviewers_completed || []).length) {
+    meta.append(badge("💬 threads resolved", "badge-resolved"));
+  }
 
   // Reviewers
   if (item.reviewers_requested?.length) {

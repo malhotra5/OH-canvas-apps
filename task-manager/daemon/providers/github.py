@@ -73,6 +73,9 @@ query($query: String!) {
           reviews(first: 20) {
             nodes { author { login } state }
           }
+          reviewThreads(first: 50) {
+            nodes { isResolved }
+          }
           commits(last: 1) {
             nodes {
               commit {
@@ -221,6 +224,10 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
                     "state": node.get("state"),
                 })
 
+            # Unresolved review comment threads
+            threads = (pr.get("reviewThreads") or {}).get("nodes", [])
+            unresolved_count = sum(1 for t in threads if not t.get("isResolved"))
+
             # Determine review status
             if requested:
                 review_status = "re-requested"
@@ -257,6 +264,7 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
                 "state": pr.get("isDraft") and "draft" or "open",
                 "ci_status": (ci_state or "NO_CHECKS").lower(),
                 "review_status": review_status,
+                "unresolved_threads": unresolved_count,
                 "reviewers_requested": requested,
                 "reviewers_completed": completed_reviews,
             })
