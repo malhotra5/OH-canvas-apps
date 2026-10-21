@@ -28,6 +28,11 @@ _CLOSING_RE = re.compile(
 )
 # Bare " #123 " mentions that aren't preceded by a closing keyword
 _MENTION_RE = re.compile(r"(?:^|[^\w/&-])((?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d+))", re.MULTILINE)
+# Full GitHub issue URLs: https://github.com/OWNER/REPO/issues/123
+_ISSUE_URL_RE = re.compile(
+    r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)",
+    re.IGNORECASE,
+)
 
 
 def _extract_issue_refs(body: str, repo: str) -> list[dict]:
@@ -42,6 +47,12 @@ def _extract_issue_refs(body: str, repo: str) -> list[dict]:
     for match in _MENTION_RE.finditer(body):
         ref, num = match.group(1), match.group(2)
         full = ref if "/" in ref else f"{repo}#{num}"
+        if full not in refs:
+            refs[full] = {"ref": full, "number": num, "closes": False}
+
+    for match in _ISSUE_URL_RE.finditer(body):
+        repo_ref, num = match.group(1), match.group(2)
+        full = f"{repo_ref}#{num}"
         if full not in refs:
             refs[full] = {"ref": full, "number": num, "closes": False}
 
