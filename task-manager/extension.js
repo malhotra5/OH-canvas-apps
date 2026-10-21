@@ -179,7 +179,7 @@ async function canvasSetSecret(host, name, value) {
   await host.agentServer.request({
     method: "PUT", path: "/api/settings/secrets",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, value }),
+    body: { name, value },
   });
 }
 
@@ -230,10 +230,11 @@ async function createConversation(host, message, title) {
     autotitle: !title,
     tags: { source: "task-manager-prompts" },
   };
+  // host.agentServer.request serializes the body itself — pass objects, not pre-stringified JSON
   const created = await host.agentServer.request({
     method: "POST", path: "/api/conversations",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body,
   });
   const convId = created.id || created.app_conversation_id;
   if (title && convId) {
@@ -241,7 +242,7 @@ async function createConversation(host, message, title) {
       await host.agentServer.request({
         method: "PATCH", path: `/api/conversations/${convId}`,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title }),
+        body: { title },
       });
     } catch {}
   }
