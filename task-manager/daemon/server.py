@@ -1,6 +1,9 @@
 """Task Manager daemon — FastAPI server.
 
 Run: uvicorn daemon.server:app --host 127.0.0.1 --port 7420
+
+Secrets are passed via headers from the frontend (which reads them from
+Canvas agent-server). The daemon is stateless regarding secrets.
 """
 
 from __future__ import annotations
@@ -8,11 +11,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .secrets import KeyStore
+from .secrets import mask, LINEAR_HEADER, GITHUB_HEADER, POSTHOG_HEADER
 from .store import StateStore
 from .prompts import PromptStore
 from .providers import github as github_provider
@@ -20,7 +23,7 @@ from .providers import linear as linear_provider
 
 DATA_DIR = Path.home() / ".openhands" / "task-manager"
 
-app = FastAPI(title="Task Manager Daemon", version="0.1.0")
+app = FastAPI(title="Task Manager Daemon", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,18 +33,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-keystore = KeyStore(DATA_DIR)
 state = StateStore(DATA_DIR)
 prompts = PromptStore(DATA_DIR)
 
 
 # ── Models ──────────────────────────────────────────────────────────────
-
-
-class KeysRequest(BaseModel):
-    linear: str | None = None
-    github: str | None = None
-    posthog: str | None = None
 
 
 class SetCreate(BaseModel):
@@ -92,19 +88,20 @@ def health():
 
 
 @app.get("/tasks")
-def get_tasks():
+def get_tasks(
+    linear_key: str | None = Header(None, alias=LINEAR_HEADER),
+    github_key: str | None = Header(None, alias=GITHUB_HEADER),
+):
     """Fetch and merge items from all configured providers, sorted by priority."""
     all_items: list[dict] = []
     errors: list[dict] = []
 
-    linear_key = keystore.get("linear")
     if linear_key:
         try:
             all_items.extend(linear_provider.fetch_issues(linear_key))
         except Exception as e:
             errors.append({"source": "linear", "error": str(e)})
 
-    github_key = keystore.get("github")
     if github_key:
         try:
             all_items.extend(github_provider.fetch_all(github_key))
@@ -112,7 +109,7 @@ def get_tasks():
             errors.append({"source": "github", "error": str(e)})
 
     if not linear_key and not github_key:
-        return {"items": [], "errors": [], "message": "No API keys configured. Set them in Settings."}
+        return {"items": [], "errors": [], "message": "No API keys provided. Set them in Settings."}
 
     # Sort: priority rank, then source rank (reviews first), then updated_at desc
     source_rank = {"github-review": 0, "linear": 1, "github-issue": 2, "github-pr": 3}
@@ -124,20 +121,6 @@ def get_tasks():
         item["dispatch"] = dispatches.get(item["id"])
 
     return {"items": all_items, "errors": errors or None}
-
-
-# ── Keys ────────────────────────────────────────────────────────────────
-
-
-@app.post("/keys")
-def set_keys(req: KeysRequest):
-    keystore.set_keys(req.model_dump())
-    return keystore.status()
-
-
-@app.get("/keys")
-def get_keys():
-    return keystore.status()
 
 
 # ── Prompts ─────────────────────────────────────────────────────────────
