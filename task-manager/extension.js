@@ -53,6 +53,20 @@ const STYLES = `
 .tm-card { border: 1px solid var(--tm-border); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; background: var(--tm-card); }
 .tm-card-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.75rem; }
 
+/* Linear relations */
+.tm-item-sub { margin-left: 1.5rem; border-left: 2px solid var(--tm-border); }
+.badge-sub { color: #b8860b; border-color: #b8860b; }
+.tm-item-parent { font-size: 0.75rem; color: var(--tm-muted); margin-top: 0.25rem; }
+.tm-item-parent a { color: var(--tm-accent); text-decoration: none; }
+.tm-item-parent a:hover { text-decoration: underline; }
+.tm-item-subs { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.75rem; margin-top: 0.25rem; }
+.tm-item-subs-label { color: var(--tm-muted); }
+.tm-item-subs a { color: var(--tm-accent); text-decoration: none; padding: 0.1rem 0.4rem; border: 1px solid var(--tm-border); border-radius: 4px; }
+.tm-item-subs a:hover { border-color: var(--tm-accent); text-decoration: underline; }
+.tm-item-gh-links { margin-top: 0.25rem; }
+.tm-item-gh-links a { display: inline-block; font-size: 0.75rem; color: #8b949e; text-decoration: none; margin-right: 0.75rem; }
+.tm-item-gh-links a:hover { color: var(--tm-accent); text-decoration: underline; }
+
 .tm-item {
   display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem 1rem;
   border: 1px solid var(--tm-border); border-radius: 8px; margin-bottom: 0.5rem;
@@ -262,7 +276,7 @@ async function renderTasks(view, host) {
 
 function taskRow(item) {
   const row = document.createElement("div");
-  row.className = "tm-item";
+  row.className = "tm-item" + (item.is_subticket ? " tm-item-sub" : "");
   const dot = document.createElement("div");
   dot.className = `tm-item-dot tm-priority-${item.priority}`;
   const body = document.createElement("div");
@@ -272,11 +286,63 @@ function taskRow(item) {
   title.append(itemLink(item));
   const meta = document.createElement("div");
   meta.className = "tm-item-meta";
+  if (item.is_subticket) meta.append(badge("sub-issue", "badge-sub"));
   meta.append(badge(item.source.replace("github-", "gh-"), `source-${item.source}`));
   if (item.identifier) meta.append(badge(item.identifier, ""));
   if (item.repo) { const s = document.createElement("span"); s.textContent = item.repo; meta.append(s); }
   if (item.team) { const s = document.createElement("span"); s.textContent = `· ${item.team}`; meta.append(s); }
   body.append(title, meta);
+
+  // Parent context for sub-tickets
+  if (item.is_subticket && item.parent) {
+    const parentEl = document.createElement("div");
+    parentEl.className = "tm-item-parent";
+    parentEl.append("↳ part of ");
+    const a = document.createElement("a");
+    a.href = item.parent.url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = `${item.parent.identifier}: ${item.parent.title}`;
+    parentEl.append(a);
+    body.append(parentEl);
+  }
+
+  // Child sub-tickets listed under the parent
+  if (item.subtickets?.length) {
+    const subsEl = document.createElement("div");
+    subsEl.className = "tm-item-subs";
+    const label = document.createElement("span");
+    label.className = "tm-item-subs-label";
+    label.textContent = `Sub-issues (${item.subtickets.length}):`;
+    subsEl.append(label);
+    for (const sub of item.subtickets) {
+      const a = document.createElement("a");
+      a.href = sub.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = sub.identifier;
+      a.title = sub.title;
+      subsEl.append(a);
+    }
+    body.append(subsEl);
+  }
+
+  // GitHub cross-links from Linear attachments
+  if (item.github_links?.length) {
+    const ghEl = document.createElement("div");
+    ghEl.className = "tm-item-gh-links";
+    for (const link of item.github_links) {
+      const a = document.createElement("a");
+      a.href = link.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = `⚙ ${link.title}`;
+      a.title = link.url;
+      ghEl.append(a);
+    }
+    body.append(ghEl);
+  }
+
   row.append(dot, body);
   return row;
 }

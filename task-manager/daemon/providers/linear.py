@@ -24,6 +24,9 @@ query AssignedIssues {
         state { name type }
         team { key name }
         labels { nodes { name } }
+        parent { identifier title url }
+        children { nodes { identifier title url } }
+        attachments { nodes { title url } }
       }
     }
   }
@@ -56,6 +59,17 @@ def fetch_issues(api_key: str) -> list[dict]:
     issues = []
     for node in viewer.get("assignedIssues", {}).get("nodes", []):
         priority_raw = node.get("priority", 0)
+
+        parent = node.get("parent")
+        children = node.get("children", {}).get("nodes", [])
+
+        # GitHub links come from attachments with github.com URLs
+        github_links = [
+            {"title": a["title"], "url": a["url"]}
+            for a in node.get("attachments", {}).get("nodes", [])
+            if "github.com" in (a.get("url") or "")
+        ]
+
         issues.append(
             {
                 "id": f"linear:{node['identifier']}",
@@ -73,6 +87,16 @@ def fetch_issues(api_key: str) -> list[dict]:
                 "team": node.get("team", {}).get("key") if node.get("team") else None,
                 "labels": [l["name"] for l in node.get("labels", {}).get("nodes", [])],
                 "state": node.get("state", {}).get("name") if node.get("state") else None,
+                "is_subticket": bool(parent),
+                "parent": (
+                    {"identifier": parent["identifier"], "title": parent["title"], "url": parent["url"]}
+                    if parent else None
+                ),
+                "subtickets": [
+                    {"identifier": c["identifier"], "title": c["title"], "url": c["url"]}
+                    for c in children
+                ],
+                "github_links": github_links,
             }
         )
     return issues
