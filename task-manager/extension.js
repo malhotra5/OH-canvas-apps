@@ -214,9 +214,29 @@ const STYLES = `
 .tm-state-not-started { background: var(--tm-muted); }
 .tm-state-in-progress { background: var(--tm-warn); }
 .tm-state-under-review { background: var(--tm-success); }
+
+/* Kanban board */
+.tm-board { display: flex; gap: 0.75rem; align-items: flex-start; }
+.tm-board-col { flex: 1; min-width: 0; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; }
+.tm-board-col-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--tm-muted); margin: 0.15rem 0.15rem 0.6rem; display: flex; justify-content: space-between; align-items: center; }
+.tm-board-col-title .tm-board-count { font-weight: 400; color: var(--tm-muted); }
+.tm-board-card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 7px; padding: 0.6rem 0.7rem; margin-bottom: 0.55rem; }
+.tm-board-card-title { font-size: 0.78rem; font-weight: 500; line-height: 1.3; margin: 0 0 0.35rem; }
+.tm-board-card-title a { color: var(--tm-text); text-decoration: none; }
+.tm-board-card-title a:hover { color: var(--tm-accent); }
+.tm-board-card-meta { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; font-size: 0.65rem; color: var(--tm-muted); }
+.tm-board-badge { padding: 0.05rem 0.4rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); font-size: 0.62rem; white-space: nowrap; }
+.tm-board-badge.ci-success { color: var(--tm-success); border-color: rgba(74,222,128,0.4); }
+.tm-board-badge.ci-failure, .tm-board-badge.ci-error { color: var(--tm-danger); border-color: rgba(248,113,113,0.4); }
+.tm-board-badge.ci-pending { color: var(--tm-warn); border-color: rgba(250,204,21,0.4); }
+.tm-board-badge.draft { color: var(--tm-muted); border-color: rgba(255,255,255,0.25); }
+.tm-board-badge.threads { color: var(--tm-warn); border-color: rgba(250,204,21,0.4); }
+.tm-board-badge.agent { color: var(--tm-accent); border-color: rgba(79,158,255,0.4); }
+.tm-board-pr { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px dashed rgba(255,255,255,0.1); }
 `;
 
 const VIEWS = [
+  { id: "board", label: "Board" },
   { id: "tasks", label: "Tasks" },
   { id: "reviews", label: "Reviews" },
   { id: "prs", label: "PRs" },
@@ -282,6 +302,16 @@ async function fetchTasks(host, { refresh = false } = {}) {
   taskCache.data = data;
   taskCache.fetchedAt = Date.now();
   return data;
+}
+
+// Fetch the kanban board (tickets grouped with their PRs into queues).
+async function fetchBoard(host, { refresh = false } = {}) {
+  const secrets = await readSecrets(host);
+  const headers = {};
+  for (const [provider, val] of Object.entries(secrets)) {
+    if (val) headers[SECRET_HEADERS[provider]] = val;
+  }
+  return daemonFetch(`/board?refresh=${refresh ? "true" : "false"}`, { headers });
 }
 
 /** Create a Canvas conversation via host.agentServer */
@@ -432,6 +462,125 @@ function filterChips(counts) {
     wrap.append(btn);
   }
   return wrap;
+}
+
+// ── Board (kanban) ──────────────────────────────────────────────────────
+
+const BOARD_QUEUES = [
+  { id: "todo", label: "Todo" },
+  { id: "in-progress", label: "In Progress" },
+  { id: "under-review", label: "Under Review" },
+];
+
+function boardCard(group) {
+  const card = document.createElement("div");
+  card.className = "tm-board-card";
+
+  const ticket = group.ticket;
+  const main = ticket || group.prs[0];
+  const top = document.createElement("div");
+  top.className = "tm-board-card-top";
+  const dot = document.createElement("div");
+  dot.className = `tm-item-dot tm-state-${group.queue === "todo" ? "not-started" : group.queue === "in-progress" ? "in-progress" : "under-review"}`;
+  dot.title = group.queue;
+  top.append(dot);
+  const sourceBadge = badge(main.source.replace("github-", "gh-"), `source-${main.source}`);
+  top.append(sourceBadge);
+  if (main.identifier) top.append(badge(main.identifier, ""));
+  if (main.priority !== undefined && main.priority !== null) {
+    const prBadge = badge(["P0", "P1", "P2", "P3", "P4"][main.priority] || "", `tm-priority-badge tm-priority-${main.priority}`);
+    top.append(prBadge);
+  }
+  card.append(top);
+
+  const title = document.createElement("div");
+  title.className = "tm-board-card-title";
+  const a = document.createElement("a");
+  a.href = main.url; a.target = "_blank"; a.rel = "noopener";
+  a.textContent = main.title;
+  title.append(a);
+  card.append(title);
+
+  const meta = document.createElement("div");
+  meta.className = "tm-board-card-meta";
+  if (main.repo) { const s = document.createElement("span"); s.textContent = main.repo; meta.append(s); }
+
+  // Active agent conversation badge
+  const d = main.dispatch;
+  if (d?.conversation_id) {
+    const agentA = document.createElement("a");
+    agentA.href = d.conversation_url || `/conversations/${d.conversation_id}`;
+    agentA.target = "_blank"; agentA.rel = "noopener";
+    const b = document.createElement("span");
+    b.className = "tm-board-badge agent";
+    b.textContent = `agent: ${d.status || "running"}`;
+    agentA.append(b);
+    meta.append(agentA);
+  }
+
+  // Linked PR rows (implementation of the ticket)
+  for (const pr of group.prs) {
+    const row = document.createElement("div");
+    row.className = "tm-board-pr";
+    const prA = document.createElement("a");
+    prA.href = pr.url; prA.target = "_blank"; prA.rel = "noopener";
+    prA.textContent = `#${pr.identifier} ${pr.title}`;
+    prA.style.cssText = "font-size:0.72rem;color:var(--tm-text);text-decoration:none;";
+    row.append(prA);
+    const badges = document.createElement("div");
+    badges.className = "tm-board-card-meta";
+    badges.style.marginTop = "0.25rem";
+    const ci = (pr.ci_status || "").toLowerCase();
+    if (ci) {
+      const label = ci === "success" ? "CI ✓" : ci === "failure" || ci === "error" ? `CI ${ci}` : ci === "no_checks" ? "no CI" : `CI ${ci}`;
+      badges.append(Object.assign(document.createElement("span"), { className: `tm-board-badge ci-${ci}`, textContent: label }));
+    }
+    if (pr.state === "draft") badges.append(Object.assign(document.createElement("span"), { className: "tm-board-badge draft", textContent: "draft" }));
+    if (pr.unresolved_threads) badges.append(Object.assign(document.createElement("span"), { className: "tm-board-badge threads", textContent: `${pr.unresolved_threads} unresolved` }));
+    if (pr.review_status && pr.review_status !== "no_reviews") badges.append(Object.assign(document.createElement("span"), { className: "tm-board-badge", textContent: pr.review_status.replace(/-/g, " ") }));
+    row.append(badges);
+    card.append(row);
+  }
+
+  card.append(meta);
+  return card;
+}
+
+async function renderBoard(view, host) {
+  renderBoard.lastView = () => renderBoard(view, host);
+  view.replaceChildren(loadingEl("Fetching board…"));
+  let data;
+  try { data = await fetchBoard(host); }
+  catch (e) { view.replaceChildren(errorEl("Cannot reach the task daemon. Is it running on port 7420?", e.message)); return; }
+
+  const { groups = [], errors, message } = data;
+  if (message) { view.replaceChildren(msgEl("info", message), emptyEl("Configure your API keys in the Settings tab to see tasks.")); return; }
+
+  const frag = document.createDocumentFragment();
+  if (errors?.length) frag.append(msgEl("err", errors.map((e) => `${e.source}: ${e.error}`).join("; ")));
+
+  const board = document.createElement("div");
+  board.className = "tm-board";
+  for (const q of BOARD_QUEUES) {
+    const col = document.createElement("div");
+    col.className = "tm-board-col";
+    const items = groups.filter((g) => g.queue === q.id);
+    const head = document.createElement("div");
+    head.className = "tm-board-col-title";
+    head.append(
+      Object.assign(document.createElement("span"), { textContent: q.label }),
+      Object.assign(document.createElement("span"), { className: "tm-board-count", textContent: String(items.length) }),
+    );
+    col.append(head);
+    if (items.length === 0) {
+      col.append(Object.assign(document.createElement("div"), { className: "tm-empty", textContent: "—", style: "padding:1rem;" }));
+    } else {
+      for (const g of items) col.append(boardCard(g));
+    }
+    board.append(col);
+  }
+  frag.append(board);
+  view.replaceChildren(frag);
 }
 
 async function renderTasks(view, host) {
@@ -1425,7 +1574,8 @@ export function activate(host) {
         }),
       );
       view.replaceChildren(loadingEl("Loading…"));
-      if (active === "tasks") renderTasks(view, host);
+      if (active === "board") renderBoard(view, host);
+      else if (active === "tasks") renderTasks(view, host);
       else if (active === "reviews") renderReviews(view, host);
       else if (active === "prs") renderPRs(view, host);
       else if (active === "prompts") renderPrompts(view, host);

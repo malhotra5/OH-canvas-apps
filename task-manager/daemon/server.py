@@ -315,3 +315,127 @@ def add_history(item_id: str, event: str, detail: str = ""):
 def add_linked_pr(item_id: str, repo: str, number: int, url: str, pr_state: str = "open"):
     state.add_linked_pr(item_id, repo, number, url, pr_state)
     return {"ok": True}
+
+
+# ── Board (kanban) ──────────────────────────────────────────────────────
+
+# CI states that count as "passing" for the under-review queue.
+# statusCheckRollup states: SUCCESS, FAILURE, PENDING, ERROR, EXPECTED, NO_CHECKS.
+_CI_PASSING = {"success"}
+
+
+def _build_board(items: list[dict]) -> list[dict]:
+    """Group tickets with their PR implementations and derive the kanban queue.
+
+    A group = one ticket (Linear or GitHub issue) + any PRs implementing it
+    (matched via the PR's linked issue refs and dispatch-state linked PRs).
+    Queue rules:
+      - todo:         no PR, no active dispatch conversation
+      - in-progress:  PR exists but isn't review-ready yet, OR an agent
+                      conversation is actively working the ticket
+      - under-review: has a PR with CI passing, marked ready (not draft),
+                      zero unresolved review threads, and a pending review request
+    """
+    tickets = [i for i in items if i["source"] in ("linear", "github-issue")]
+    prs = [i for i in items if i["source"] == "github-pr"]
+
+    # Index tickets for PR ref matching:
+    #   "Owner/repo#N" and bare "#N" -> GitHub issues; dispatch linked_prs -> any ticket
+    gh_by_ref: dict[str, dict] = {}
+    for t in tickets:
+        if t["source"] == "github-issue":
+            gh_by_ref[f"{t['repo']}#{t['identifier']}"] = t
+            gh_by_ref[t["identifier"]] = t
+    # Reverse index: (repo, number) -> tickets, from dispatch-state linked PRs
+    linked_ticket_by_pr: dict[tuple, list[dict]] = {}
+    for t in tickets:
+        for pr in (t.get("dispatch") or {}).get("linked_prs", []) or []:
+            linked_ticket_by_pr.setdefault((pr.get("repo", ""), int(pr.get("number", 0))), []).append(t)
+
+    def match_ticket_for_pr(pr: dict) -> list[dict]:
+        matched: list[dict] = []
+        seen = set()
+        for ref in pr.get("linked_issues", []) or []:
+            t = gh_by_ref.get(ref.get("ref", "")) or gh_by_ref.get(str(ref.get("number", "")))
+            if t and t["id"] not in seen:
+                seen.add(t["id"])
+                matched.append(t)
+        for t in linked_ticket_by_pr.get((pr.get("repo", ""), int(pr["identifier"])), []):
+            if t["id"] not in seen:
+                seen.add(t["id"])
+                matched.append(t)
+        return matched
+
+    prs_by_ticket: dict[str, list[dict]] = {}
+    orphan_prs: list[dict] = []
+    for pr in prs:
+        matched = match_ticket_for_pr(pr)
+        if matched:
+            for t in matched:
+                prs_by_ticket.setdefault(t["id"], []).append(pr)
+        else:
+            orphan_prs.append(pr)
+
+    def pr_under_review(pr: dict) -> bool:
+        ci = (pr.get("ci_status") or "").lower()
+        return (
+            ci in _CI_PASSING
+            and pr.get("state") != "draft"
+            and not pr.get("unresolved_threads")
+            and bool(pr.get("reviewers_requested"))
+        )
+
+    def dispatch_active(t: dict) -> bool:
+        d = t.get("dispatch")
+        if not d or not d.get("conversation_id"):
+            return False
+        return d.get("status") not in ("completed", "failed", "stopped")
+
+    groups: list[dict] = []
+    for t in tickets:
+        linked = prs_by_ticket.get(t["id"], [])
+        queue = "todo"
+        if any(pr_under_review(p) for p in linked):
+            queue = "under-review"
+        elif linked or dispatch_active(t):
+            queue = "in-progress"
+        groups.append({
+            "id": t["id"],
+            "queue": queue,
+            "ticket": t,
+            "prs": linked,
+            "orphan": False,
+        })
+
+    # PRs with no resolvable ticket still show on the board as their own cards
+    for pr in orphan_prs:
+        queue = "under-review" if pr_under_review(pr) else "in-progress"
+        groups.append({
+            "id": pr["id"],
+            "queue": queue,
+            "ticket": None,
+            "prs": [pr],
+            "orphan": True,
+        })
+
+    # Sort by ticket priority, then recency
+    def sort_key(g):
+        t = g["ticket"] or g["prs"][0]
+        return (
+            t.get("priority", 2),
+            _SortDesc(t.get("updated_at") or t.get("created_at") or ""),
+        )
+
+    groups.sort(key=sort_key)
+    return groups
+
+
+@app.get("/board")
+def get_board(
+    refresh: bool = False,
+    linear_key: str | None = Header(None, alias=LINEAR_HEADER),
+    github_key: str | None = Header(None, alias=GITHUB_HEADER),
+):
+    """Kanban board: tickets grouped with their PRs, bucketed into queues."""
+    tasks = get_tasks(refresh=refresh, linear_key=linear_key, github_key=github_key)
+    return {"groups": _build_board(tasks["items"]), "errors": tasks.get("errors")}
