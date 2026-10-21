@@ -11,7 +11,7 @@ query AssignedIssues {
   viewer {
     id
     name
-    assignedIssues(filter: { state: { type: { neq: "completed" } } }) {
+    assignedIssues(filter: { state: { type: { nin: ["completed", "canceled", "duplicate"] } } }) {
       nodes {
         id
         identifier
