@@ -81,6 +81,10 @@ class ActionTemplateUpdate(BaseModel):
     template_id: str
 
 
+class ActionProfileUpdate(BaseModel):
+    profile_id: str = ""
+
+
 class PreviewRequest(BaseModel):
     body: str
     variables: dict[str, Any] = {}
@@ -271,6 +275,16 @@ def get_action_map():
 @app.put("/prompts/action-map/{action}")
 def set_action_template(action: str, req: ActionTemplateUpdate):
     return prompts.set_action_template(action, req.template_id)
+
+
+@app.get("/prompts/profile-map")
+def get_profile_map():
+    return prompts.get_profile_map()
+
+
+@app.put("/prompts/profile-map/{action}")
+def set_action_profile(action: str, req: ActionProfileUpdate):
+    return prompts.set_action_profile(action, req.profile_id)
 
 
 @app.post("/prompts/preview")

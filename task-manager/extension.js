@@ -285,7 +285,7 @@ async function fetchTasks(host, { refresh = false } = {}) {
 }
 
 /** Create a Canvas conversation via host.agentServer */
-async function createConversation(host, message, title) {
+async function createConversation(host, message, title, agentProfileId = "") {
   const body = {
     workspace: { kind: "LocalWorkspace", working_dir: "workspace/feedback" },
     worktree: false,
@@ -295,6 +295,9 @@ async function createConversation(host, message, title) {
     autotitle: !title,
     tags: { source: "task-manager-prompts" },
   };
+  // The API requires one of agent / agent_settings / agent_profile_id.
+  // Empty string means "use the account's active profile".
+  if (agentProfileId) body.agent_profile_id = agentProfileId;
   // host.agentServer.request serializes the body itself — pass objects, not pre-stringified JSON
   const created = await host.agentServer.request({
     method: "POST", path: "/api/conversations",
@@ -323,6 +326,8 @@ async function dispatchPromptForItem(host, item, actionKey, { extraVars = {}, ti
   const data = await daemonFetch("/prompts");
   const activeSet = (data.sets || []).find((s) => s.id === data.active_set_id) || (data.sets || [])[0];
   const actionMap = data.action_map || {};
+  const profileMap = data.profile_map || {};
+  const agentProfileId = profileMap[actionKey] || "";
   const templateId = actionMap[actionKey] || actionKey;
   const tmpl = (activeSet?.templates || []).find((t) => t.id === templateId);
   if (!tmpl) throw new Error(`No template assigned to action "${actionKey}" (looked for id "${templateId}" in set "${activeSet?.name}"). Set it in Settings.`);
@@ -346,7 +351,7 @@ async function dispatchPromptForItem(host, item, actionKey, { extraVars = {}, ti
     rendered = rendered.split(`{{${k}}}`).join(String(v));
   }
 
-  return createConversation(host, rendered, title);
+  return createConversation(host, rendered, title, agentProfileId);
 }
 
 // ── Shared render helpers ───────────────────────────────────────────────
@@ -960,6 +965,18 @@ async function renderSettings(view, host) {
     const activeSet = (promptData.sets || []).find((s) => s.id === promptData.active_set_id) || (promptData.sets || [])[0];
     const allTemplates = activeSet?.templates || [];
     const actionMap = promptData.action_map || {};
+    const profileMap = promptData.profile_map || {};
+
+    // Fetch the account's agent profiles for the per-action profile dropdowns
+    let agentProfiles = [];
+    let activeProfileId = "";
+    try {
+      const profData = await host.agentServer.request({
+        method: "GET", path: "/api/agent-profiles",
+      });
+      agentProfiles = profData.profiles || [];
+      activeProfileId = profData.active_agent_profile_id || "";
+    } catch { /* agent server may not expose profiles — dropdowns stay empty */ }
 
     const mapCard = document.createElement("div");
     mapCard.className = "tm-card";
@@ -975,8 +992,9 @@ async function renderSettings(view, host) {
     for (const action of ACTIONS) {
       const row = document.createElement("div");
       row.className = "tm-action-map-row";
+      row.style.cssText = "flex-wrap:wrap;gap:0.4rem;";
       const left = document.createElement("div");
-      left.style.cssText = "flex:1;";
+      left.style.cssText = "flex:1;min-width:180px;";
       left.append(Object.assign(document.createElement("div"), { className: "action-label", textContent: action.label }));
       left.append(Object.assign(document.createElement("div"), { className: "action-desc", textContent: action.description }));
       const select = document.createElement("select");
@@ -1011,7 +1029,51 @@ async function renderSettings(view, host) {
           statusMsg.textContent = `✗ ${e.message}`;
         }
       });
-      row.append(left, select, statusMsg);
+
+      // Per-action agent profile dropdown (empty = account's active profile)
+      const profStatusMsg = document.createElement("span");
+      profStatusMsg.style.cssText = "font-size:0.68rem;color:var(--tm-muted);";
+      const profSelect = document.createElement("select");
+      profSelect.className = "tm-action-map-select";
+      profSelect.title = "Agent profile used for this action's conversations";
+      const currentPid = profileMap[action.key] || "";
+      if (agentProfiles.length > 0) {
+        const noneOpt = document.createElement("option");
+        noneOpt.value = "";
+        const activeProf = agentProfiles.find((p) => p.id === activeProfileId);
+        noneOpt.textContent = activeProf ? `Active (${activeProf.name})` : "Active profile";
+        if (currentPid === "") noneOpt.selected = true;
+        profSelect.append(noneOpt);
+        for (const p of agentProfiles) {
+          const opt = document.createElement("option");
+          opt.value = p.id;
+          opt.textContent = `${p.name} · ${p.llm_profile_ref || p.agent_kind}`;
+          if (p.id === currentPid) opt.selected = true;
+          profSelect.append(opt);
+        }
+      } else {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "— no profiles available —";
+        opt.disabled = true;
+        opt.selected = true;
+        profSelect.append(opt);
+        profSelect.disabled = true;
+      }
+      profSelect.addEventListener("change", async () => {
+        profStatusMsg.textContent = "Saving…";
+        try {
+          await daemonFetch(`/prompts/profile-map/${action.key}`, {
+            method: "PUT",
+            body: JSON.stringify({ profile_id: profSelect.value }),
+          });
+          profStatusMsg.textContent = "✓";
+          setTimeout(() => { profStatusMsg.textContent = ""; }, 2000);
+        } catch (e) {
+          profStatusMsg.textContent = `✗ ${e.message}`;
+        }
+      });
+      row.append(left, select, profSelect, profStatusMsg, statusMsg);
       mapCard.append(row);
     }
     frag.append(mapCard);

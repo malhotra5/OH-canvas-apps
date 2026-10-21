@@ -140,6 +140,13 @@ DEFAULT_SETS = {
         "resolve-threads": "resolve-threads",
         "prompt-helper": "prompt-helper",
     },
+    # action -> agent profile id (empty string = use the account's active profile)
+    "profile_map": {
+        "create-ticket": "",
+        "fix-ci": "",
+        "resolve-threads": "",
+        "prompt-helper": "",
+    },
 }
 
 
@@ -179,6 +186,15 @@ class PromptStore:
             for action, tmpl_id in DEFAULT_SETS["action_map"].items():
                 if action not in data["action_map"]:
                     data["action_map"][action] = tmpl_id
+                    changed = True
+        # Merge profile_map defaults for actions not yet mapped
+        if "profile_map" not in data:
+            data["profile_map"] = json.loads(json.dumps(DEFAULT_SETS["profile_map"]))
+            changed = True
+        else:
+            for action, pid in DEFAULT_SETS["profile_map"].items():
+                if action not in data["profile_map"]:
+                    data["profile_map"][action] = pid
                     changed = True
         if changed:
             self._write(data)
@@ -279,6 +295,15 @@ class PromptStore:
         data.setdefault("action_map", {})[action] = template_id
         self._write(data)
         return data["action_map"]
+
+    def get_profile_map(self) -> dict:
+        return self._read().get("profile_map", {})
+
+    def set_action_profile(self, action: str, profile_id: str) -> dict:
+        data = self._read()
+        data.setdefault("profile_map", {})[action] = profile_id
+        self._write(data)
+        return data["profile_map"]
 
     def render(self, body: str, variables: dict[str, Any]) -> str:
         return _render(body, variables)
