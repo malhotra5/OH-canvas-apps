@@ -70,6 +70,13 @@ const STYLES = `
   background: var(--tm-card); color: var(--tm-text); border: 1px solid var(--tm-border);
   border-radius: 6px; resize: vertical; box-sizing: border-box;
 }
+.tm-prompt-field {
+  padding: 0.35rem 0.5rem; font-size: 0.72rem; font-family: inherit; flex: 1; min-width: 8rem;
+  background: var(--tm-card); color: var(--tm-text); border: 1px solid var(--tm-border);
+  border-radius: 6px; box-sizing: border-box;
+}
+.tm-del-btn { padding: 0.1rem 0.4rem; font-size: 0.72rem; border-radius: 6px; }
+.tm-del-btn:hover { color: var(--tm-danger); border-color: var(--tm-danger); }
 .tm-actions-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; align-items: center; }
 .tm-action-btn {
   padding: 0.25rem 0.7rem; font-size: 0.72rem; font-weight: 500; border: 1px solid var(--tm-border);
@@ -952,12 +959,46 @@ async function renderPrompts(view, host) {
         const row = document.createElement("div");
         row.style.cssText = "padding:0.5rem 0;border-bottom:1px solid var(--tm-border);font-size:0.8rem;";
         const name = document.createElement("div");
-        name.style.cssText = "display:flex;align-items:center;gap:0.5rem;";
+        name.style.cssText = "display:flex;align-items:center;gap:0.5rem;flex:1;";
         name.style.fontWeight = "500";
         name.textContent = tmpl.title;
-        const applies = document.createElement("div");
-        applies.style.cssText = "font-size:0.7rem;color:var(--tm-muted);margin-top:0.2rem;";
-        applies.textContent = `applies to: ${(tmpl.applies_to || []).join(", ") || "all"}`;
+
+        // Delete button (inline, on the title row)
+        const delBtn = document.createElement("button");
+        delBtn.className = "tm-action-btn tm-del-btn";
+        delBtn.textContent = "🗑";
+        delBtn.title = "Delete template";
+        delBtn.addEventListener("click", async () => {
+          if (!confirm(`Delete template "${tmpl.title}"? This cannot be undone.`)) return;
+          delBtn.disabled = true;
+          try {
+            await daemonFetch(`/prompts/sets/${set.id}/templates/${tmpl.id}`, { method: "DELETE" });
+            renderPrompts(view, host);
+          } catch (e) {
+            alert(`Delete failed: ${e.message}`);
+            delBtn.disabled = false;
+          }
+        });
+
+        const titleRow = document.createElement("div");
+        titleRow.style.cssText = "display:flex;align-items:center;gap:0.5rem;";
+        titleRow.append(name, delBtn);
+
+        // Editable title + applies_to
+        const editMeta = document.createElement("div");
+        editMeta.style.cssText = "display:flex;gap:0.5rem;margin-top:0.3rem;align-items:center;flex-wrap:wrap;";
+        const titleInput = document.createElement("input");
+        titleInput.type = "text";
+        titleInput.value = tmpl.title;
+        titleInput.className = "tm-prompt-field";
+        titleInput.title = "Template title";
+        const appliesInput = document.createElement("input");
+        appliesInput.type = "text";
+        appliesInput.value = (tmpl.applies_to || []).join(", ");
+        appliesInput.className = "tm-prompt-field";
+        appliesInput.title = "applies_to: comma-separated sources (linear, github-issue, github-review, github-pr)";
+        appliesInput.placeholder = "applies to (csv)";
+        editMeta.append(titleInput, appliesInput);
 
         // Editable template body + save
         const bodyArea = document.createElement("textarea");
@@ -981,9 +1022,14 @@ async function renderPrompts(view, host) {
           saveBtn.disabled = true;
           statusMsg.textContent = "Saving…";
           try {
+            const appliesTo = appliesInput.value.split(",").map((s) => s.trim()).filter(Boolean);
             await daemonFetch(`/prompts/sets/${set.id}/templates/${tmpl.id}`, {
               method: "PUT",
-              body: JSON.stringify({ body: bodyArea.value }),
+              body: JSON.stringify({
+                title: titleInput.value.trim() || tmpl.title,
+                body: bodyArea.value,
+                ...(appliesTo.length ? { applies_to: appliesTo } : {}),
+              }),
             });
             statusMsg.textContent = "✓ Saved";
             setTimeout(() => { statusMsg.textContent = ""; }, 2500);
@@ -993,17 +1039,93 @@ async function renderPrompts(view, host) {
           saveBtn.disabled = false;
         });
         resetBtn.addEventListener("click", () => {
+          titleInput.value = tmpl.title;
+          appliesInput.value = (tmpl.applies_to || []).join(", ");
           bodyArea.value = tmpl.body;
           statusMsg.textContent = "reverted";
           setTimeout(() => { statusMsg.textContent = ""; }, 2500);
         });
 
-        row.append(name, applies, bodyArea, actions);
+        row.append(titleRow, editMeta, bodyArea, actions);
         card.append(row);
       }
     } else {
       card.append(emptyEl("No templates"));
     }
+
+    // ── New template form ─────────────────────────────────────────
+    const newForm = document.createElement("div");
+    newForm.style.cssText = "margin-top:0.75rem;padding-top:0.75rem;border-top:1px dashed var(--tm-border);";
+    const newToggle = document.createElement("button");
+    newToggle.className = "tm-btn tm-btn-secondary tm-btn-sm";
+    newToggle.textContent = "＋ New template";
+    newForm.append(newToggle);
+
+    const newFields = document.createElement("div");
+    newFields.style.cssText = "display:none;margin-top:0.6rem;flex-direction:column;gap:0.4rem;";
+    const newTitle = document.createElement("input");
+    newTitle.type = "text";
+    newTitle.placeholder = "Template title";
+    newTitle.className = "tm-prompt-field";
+    const newApplies = document.createElement("input");
+    newApplies.type = "text";
+    newApplies.placeholder = "applies to (csv): linear, github-issue, github-review, github-pr";
+    newApplies.className = "tm-prompt-field";
+    const newBody = document.createElement("textarea");
+    newBody.placeholder = "Prompt body — supports {{title}}, {{url}}, {{repo}}, {{identifier}}, {{body}}, {{source}}, {{state}} and custom vars";
+    newBody.className = "tm-prompt-edit";
+    newBody.rows = 6;
+    const newActions = document.createElement("div");
+    newActions.style.cssText = "display:flex;gap:0.5rem;align-items:center;";
+    const newSaveBtn = document.createElement("button");
+    newSaveBtn.className = "tm-btn tm-btn-sm";
+    newSaveBtn.textContent = "Create template";
+    const newCancelBtn = document.createElement("button");
+    newCancelBtn.className = "tm-btn tm-btn-secondary tm-btn-sm";
+    newCancelBtn.textContent = "Cancel";
+    const newStatus = document.createElement("span");
+    newStatus.style.cssText = "font-size:0.7rem;color:var(--tm-muted);";
+    newActions.append(newSaveBtn, newCancelBtn, newStatus);
+    newFields.append(newTitle, newApplies, newBody, newActions);
+    newForm.append(newFields);
+
+    newToggle.addEventListener("click", () => {
+      const show = newFields.style.display === "none";
+      newFields.style.display = show ? "flex" : "none";
+      newToggle.textContent = show ? "－ Cancel" : "＋ New template";
+      if (show) newTitle.focus();
+    });
+    newCancelBtn.addEventListener("click", () => {
+      newFields.style.display = "none";
+      newToggle.textContent = "＋ New template";
+      newTitle.value = ""; newApplies.value = ""; newBody.value = ""; newStatus.textContent = "";
+    });
+
+    newSaveBtn.addEventListener("click", async () => {
+      if (!newTitle.value.trim() || !newBody.value.trim()) {
+        newStatus.textContent = "Title and body are required.";
+        return;
+      }
+      newSaveBtn.disabled = true;
+      newStatus.textContent = "Creating…";
+      try {
+        const appliesTo = newApplies.value.split(",").map((s) => s.trim()).filter(Boolean);
+        await daemonFetch(`/prompts/sets/${set.id}/templates`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: newTitle.value.trim(),
+            body: newBody.value,
+            ...(appliesTo.length ? { applies_to: appliesTo } : {}),
+          }),
+        });
+        renderPrompts(view, host);
+      } catch (e) {
+        newStatus.textContent = `✗ ${e.message}`;
+        newSaveBtn.disabled = false;
+      }
+    });
+
+    card.append(newForm);
     frag.append(card);
   }
 
