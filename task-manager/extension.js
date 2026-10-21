@@ -57,6 +57,8 @@ const STYLES = `
 .tm-item-sub { margin-left: 1.5rem; border-left: 2px solid var(--tm-border); }
 .badge-sub { color: #b8860b; border-color: #b8860b; }
 .badge-inprogress { color: #4caf50; border-color: #4caf50; }
+.badge-state-in-progress { color: var(--tm-warn); border-color: var(--tm-warn); }
+.badge-state-under-review { color: var(--tm-success); border-color: var(--tm-success); }
 .badge-no-issue { color: #f85149; border-color: #f85149; }
 
 /* Filter chips */
@@ -142,6 +144,11 @@ const STYLES = `
 .tm-priority-2 { background: var(--tm-accent); }
 .tm-priority-3 { background: var(--tm-muted); }
 .tm-priority-4 { background: rgba(255,255,255,0.15); }
+
+/* State-colored dots: gray=not started, yellow=in progress, green=under review */
+.tm-state-not-started { background: var(--tm-muted); }
+.tm-state-in-progress { background: var(--tm-warn); }
+.tm-state-under-review { background: var(--tm-success); }
 `;
 
 const VIEWS = [
@@ -282,6 +289,24 @@ function isInProgress(item) {
   return IN_PROGRESS_STATES.some((s) => st.includes(s));
 }
 
+// Task state classification for dot coloring + filters:
+//   not-started (gray) | in-progress (yellow) | under-review (green)
+function taskState(item) {
+  if (item.source === "linear") {
+    if (isUnderReview(item)) return "under-review";
+    return item.state_type === "started" ? "in-progress" : "not-started";
+  }
+  const st = (item.state || "").toLowerCase();
+  if (st.includes("under review") || st.includes("in review")) return "under-review";
+  if (IN_PROGRESS_STATES.some((s) => st.includes(s))) return "in-progress";
+  return "not-started";
+}
+
+function isUnderReview(item) {
+  const st = (item.state || "").toLowerCase();
+  return st.includes("under review") || st.includes("in review");
+}
+
 // Filter chip state for the tasks view ("all" | "in-progress" | "not-started")
 let taskFilter = "all";
 
@@ -321,14 +346,14 @@ async function renderTasks(view, host) {
 
   const counts = {
     all: issues.length,
-    inProgress: issues.filter(isInProgress).length,
-    notStarted: issues.length - issues.filter(isInProgress).length,
+    inProgress: issues.filter((i) => taskState(i) !== "not-started").length,
+    notStarted: issues.filter((i) => taskState(i) === "not-started").length,
   };
   frag.append(filterChips(counts));
 
   // Apply state filter, then sort: priority asc, most recently opened first
   const filtered = issues
-    .filter((i) => taskFilter === "all" || (taskFilter === "in-progress") === isInProgress(i))
+    .filter((i) => taskFilter === "all" || (taskFilter === "in-progress") === (taskState(i) !== "not-started"))
     .sort((a, b) => a.priority - b.priority || dateDesc(a, b));
 
   if (filtered.length === 0) {
@@ -344,7 +369,9 @@ function taskRow(item) {
   const row = document.createElement("div");
   row.className = "tm-item" + (item.is_subticket ? " tm-item-sub" : "");
   const dot = document.createElement("div");
-  dot.className = `tm-item-dot tm-priority-${item.priority}`;
+  // State-colored dot: gray=not started, yellow=in progress, green=under review
+  dot.className = `tm-item-dot tm-state-${taskState(item)}`;
+  dot.title = item.state || taskState(item);
   const body = document.createElement("div");
   body.className = "tm-item-body";
   const title = document.createElement("div");
@@ -353,7 +380,8 @@ function taskRow(item) {
   const meta = document.createElement("div");
   meta.className = "tm-item-meta";
   if (item.is_subticket) meta.append(badge("sub-issue", "badge-sub"));
-  if (isInProgress(item)) meta.append(badge("in progress", "badge-inprogress"));
+  const st = taskState(item);
+  if (st !== "not-started") meta.append(badge(st.replace("-", " "), `badge-state-${st}`));
   meta.append(badge(item.source.replace("github-", "gh-"), `source-${item.source}`));
   if (item.identifier) meta.append(badge(item.identifier, ""));
   if (item.state) { const s = document.createElement("span"); s.textContent = `· ${item.state}`; meta.append(s); }
