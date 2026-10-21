@@ -4,10 +4,12 @@ Run: uvicorn daemon.server:app --host 127.0.0.1 --port 7420
 
 Secrets are passed via headers from the frontend (which reads them from
 Canvas agent-server). The daemon is stateless regarding secrets.
+GitHub also falls back to `gh auth token` if no key header is provided.
 """
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,17 @@ app.add_middleware(
 
 state = StateStore(DATA_DIR)
 prompts = PromptStore(DATA_DIR)
+
+
+def _gh_token() -> str | None:
+    """Fall back to `gh auth token` if available."""
+    try:
+        result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
 
 
 # ── Models ──────────────────────────────────────────────────────────────
@@ -96,20 +109,34 @@ def get_tasks(
     all_items: list[dict] = []
     errors: list[dict] = []
 
+    # GitHub: use header key, or fall back to `gh auth token`
+    gh_key = github_key or _gh_token()
+
     if linear_key:
         try:
             all_items.extend(linear_provider.fetch_issues(linear_key))
         except Exception as e:
             errors.append({"source": "linear", "error": str(e)})
 
-    if github_key:
+    if gh_key:
         try:
-            all_items.extend(github_provider.fetch_all(github_key))
+            all_items.extend(github_provider.fetch_all(gh_key))
         except Exception as e:
-            errors.append({"source": "github", "error": str(e)})
+            # If the provided token fails with 401, try `gh auth token` fallback
+            if "401" in str(e) and github_key:
+                gh_fallback = _gh_token()
+                if gh_fallback and gh_fallback != github_key:
+                    try:
+                        all_items.extend(github_provider.fetch_all(gh_fallback))
+                    except Exception as e2:
+                        errors.append({"source": "github", "error": str(e2)})
+                else:
+                    errors.append({"source": "github", "error": str(e)})
+            else:
+                errors.append({"source": "github", "error": str(e)})
 
-    if not linear_key and not github_key:
-        return {"items": [], "errors": [], "message": "No API keys provided. Set them in Settings."}
+    if not linear_key and not gh_key:
+        return {"items": [], "errors": [], "message": "No API keys provided. Set them in Settings or run `gh auth login`."}
 
     # Sort: priority rank, then source rank (reviews first), then updated_at desc
     source_rank = {"github-review": 0, "linear": 1, "github-issue": 2, "github-pr": 3}
