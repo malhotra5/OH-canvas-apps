@@ -78,3 +78,35 @@ class StateStore:
                 return
         prs.append({"repo": repo, "number": number, "url": url, "state": state})
         self._write(data)
+
+    def get_running(self) -> dict[str, str]:
+        """Return {item_id: conversation_id} for all dispatches still running."""
+        data = self._read()
+        out = {}
+        for item_id, d in data.get("dispatches", {}).items():
+            if d.get("status") == "running" and d.get("conversation_id"):
+                out[item_id] = d["conversation_id"]
+            for h in d.get("action_history", []):
+                if h.get("status") == "running" and h.get("conversation_id"):
+                    out[f"{item_id}::history::{h['conversation_id']}"] = h["conversation_id"]
+        return out
+
+    def update_status(self, item_id: str, conversation_id: str, new_status: str) -> None:
+        """Update the status of a dispatch and matching action_history entry by conversation_id."""
+        data = self._read()
+        dispatches = data.get("dispatches", {})
+        actual_item_id = item_id.split("::history::")[0] if "::history::" in item_id else item_id
+        entry = dispatches.get(actual_item_id)
+        if not entry:
+            return
+        changed = False
+        if entry.get("conversation_id") == conversation_id and entry.get("status") != new_status:
+            entry["status"] = new_status
+            entry["last_checked_at"] = _now()
+            changed = True
+        for h in entry.get("action_history", []):
+            if h.get("conversation_id") == conversation_id and h.get("status") != new_status:
+                h["status"] = new_status
+                changed = True
+        if changed:
+            self._write(data)

@@ -9,12 +9,14 @@ GitHub also falls back to `gh auth token` if no key header is provided.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -39,6 +41,38 @@ app.add_middleware(
 
 state = StateStore(DATA_DIR)
 prompts = PromptStore(DATA_DIR)
+
+AGENT_SERVER = "http://localhost:18000"
+_API_KEY_CACHE: dict = {"val": None, "read_at": 0.0}
+
+# Map agent-server execution_status → our dispatch status
+_EXEC_STATUS_MAP = {
+    "idle": "running",
+    "running": "running",
+    "paused": "running",
+    "waiting_for_confirmation": "running",
+    "finished": "completed",
+    "error": "failed",
+    "stuck": "failed",
+    "deleting": "failed",
+}
+
+
+def _agent_api_key() -> str | None:
+    """Read the agent-server API key from the canvas config file."""
+    key_path = Path.home() / ".openhands" / "agent-canvas" / "api-key.txt"
+    if not key_path.exists():
+        return None
+    # Cache for 60s to avoid re-reading on every poll
+    now = time.time()
+    if _API_KEY_CACHE["val"] and now - _API_KEY_CACHE["read_at"] < 60:
+        return _API_KEY_CACHE["val"]
+    try:
+        val = key_path.read_text().strip()
+        _API_KEY_CACHE.update(val=val or None, read_at=now)
+        return val or None
+    except OSError:
+        return None
 
 
 def _gh_token() -> str | None:
@@ -107,6 +141,41 @@ class DispatchUpdate(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── Conversation status poller ───────────────────────────────────────────
+
+POLL_INTERVAL = 30  # seconds between polls
+
+
+async def _poll_conversation_statuses() -> None:
+    """Background task: poll agent-server for running conversations and update their status."""
+    while True:
+        await asyncio.sleep(POLL_INTERVAL)
+        api_key = _agent_api_key()
+        if not api_key:
+            continue
+        running = state.get_running()
+        if not running:
+            continue
+        headers = {"X-Session-API-Key": api_key}
+        async with httpx.AsyncClient(timeout=10) as client:
+            for item_id, conv_id in running.items():
+                try:
+                    resp = await client.get(f"{AGENT_SERVER}/api/conversations/{conv_id}", headers=headers)
+                    if resp.status_code != 200:
+                        continue
+                    exec_status = resp.json().get("execution_status", "running")
+                    mapped = _EXEC_STATUS_MAP.get(exec_status, "running")
+                    if mapped != "running":
+                        state.update_status(item_id, conv_id, mapped)
+                except (httpx.HTTPError, KeyError, ValueError):
+                    continue
+
+
+@app.on_event("startup")
+async def _start_status_poller() -> None:
+    asyncio.create_task(_poll_conversation_statuses())
 
 
 # ── Task cache ───────────────────────────────────────────────────────────
