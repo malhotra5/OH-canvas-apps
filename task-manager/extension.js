@@ -21,6 +21,7 @@ const ACTIONS = [
   { key: "create-ticket", label: "🎫 Create linked ticket", description: "PR with no linked issue — search for existing or create new" },
   { key: "fix-ci", label: "🔧 Fix failing CI", description: "PR with failing checks — diagnose and fix" },
   { key: "resolve-threads", label: "💬 Resolve review comments", description: "PR with unresolved review threads" },
+  { key: "prompt-helper", label: "🚀 Launch prompt helper", description: "Prompts page — launches an agent to help write prompt templates" },
 ];
 
 const STYLES = `
@@ -1248,21 +1249,10 @@ async function renderPrompts(view, host) {
     launchBtn.disabled = true;
     launchMsg.replaceChildren(loadingEl("Launching agent conversation…"));
     try {
-      const helperPrompt = `You are a prompt engineering helper for a personal task manager app.
-
-The app fetches Linear issues, GitHub issues, pending reviews, and open PRs (with CI status and reviewer info). It has a prompt system with sets of templates that are used when dispatching agent conversations to work on tickets.
-
-Current prompt sets and templates:
-${JSON.stringify(data.sets || [], null, 2)}
-
-Help me write new prompt templates or improve existing ones. Each template has:
-- title: short name
-- body: the prompt text (supports {{variables}} like {{title}}, {{url}}, {{repo}}, {{identifier}})
-- applies_to: array of source types ("linear", "github-issue", "github-review", "github-pr")
-
-Ask me what kind of prompt I want to create, then help me draft it. When we're happy with the result, give me the final template in JSON format so I can save it.`;
-
-      const result = await createConversation(host, helperPrompt, "📝 Prompt Helper");
+      const result = await dispatchPromptForItem(host, { source: "prompt-helper" }, "prompt-helper", {
+        extraVars: { sets_json: JSON.stringify(data.sets || [], null, 2) },
+        title: "📝 Prompt Helper",
+      });
       launchMsg.replaceChildren(msgEl("ok", `Agent conversation launched. `));
       // Add link
       const link = document.createElement("a");

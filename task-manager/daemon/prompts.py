@@ -115,6 +115,29 @@ DEFAULT_SETS = {
                         "reason), and how many threads remain unresolved (should be 0)."
                     ),
                 },
+                {
+                    "id": "prompt-helper",
+                    "title": "Prompt helper",
+                    "applies_to": [],
+                    "body": (
+                        "You are a prompt engineering helper for a personal task manager app.\n\n"
+                        "The app fetches Linear issues, GitHub issues, pending reviews, and open PRs "
+                        "(with CI status and reviewer info). It has a prompt system with sets of "
+                        "templates that are used when dispatching agent conversations to work on "
+                        "tickets.\n\n"
+                        "Current prompt sets and templates:\n"
+                        "{{sets_json}}\n\n"
+                        "Help me write new prompt templates or improve existing ones. Each template has:\n"
+                        "- title: short name\n"
+                        "- body: the prompt text (supports variables like title, url, repo, identifier "
+                        "written in double-curly syntax)\n"
+                        "- applies_to: array of source types (\"linear\", \"github-issue\", "
+                        "\"github-review\", \"github-pr\")\n\n"
+                        "Ask me what kind of prompt I want to create, then help me draft it. When "
+                        "we're happy with the result, give me the final template in JSON format so "
+                        "I can save it."
+                    ),
+                },
             ],
         }
     ],
@@ -123,6 +146,7 @@ DEFAULT_SETS = {
         "create-ticket": "create-ticket",
         "fix-ci": "fix-ci",
         "resolve-threads": "resolve-threads",
+        "prompt-helper": "prompt-helper",
     },
 }
 
