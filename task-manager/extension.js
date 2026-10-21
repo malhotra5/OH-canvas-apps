@@ -72,6 +72,27 @@ const STYLES = `
 .badge-unresolved { color: var(--tm-danger); border-color: var(--tm-danger); }
 .badge-resolved { color: var(--tm-success); border-color: var(--tm-success); }
 
+/* Agent activity section on PR rows */
+.tm-agent-activity { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.tm-agent-run { display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; padding: 0.3rem 0.5rem; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid var(--tm-border); transition: border-color 0.15s; }
+.tm-agent-run:hover { border-color: var(--tm-accent); }
+.tm-agent-run-icon { font-size: 0.85rem; flex-shrink: 0; }
+.tm-agent-run-label { color: var(--tm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-agent-run-status { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; padding: 0.1rem 0.4rem; border-radius: 4px; white-space: nowrap; }
+.tm-agent-run-status.running { color: var(--tm-warn); background: rgba(251,191,36,0.12); }
+.tm-agent-run-status.completed { color: var(--tm-success); background: rgba(74,222,128,0.12); }
+.tm-agent-run-status.failed { color: var(--tm-danger); background: rgba(248,113,113,0.12); }
+.tm-agent-run-status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.tm-agent-run-status.running .tm-agent-run-status-dot { background: var(--tm-warn); animation: tm-pulse 1.5s infinite; }
+.tm-agent-run-status.completed .tm-agent-run-status-dot { background: var(--tm-success); }
+.tm-agent-run-status.failed .tm-agent-run-status-dot { background: var(--tm-danger); }
+@keyframes tm-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.tm-agent-run-link { color: var(--tm-accent); text-decoration: none; font-size: 0.68rem; margin-left: auto; white-space: nowrap; }
+.tm-agent-run-link:hover { text-decoration: underline; }
+.tm-agent-run-time { color: var(--tm-muted); font-size: 0.65rem; }
+.tm-board-agent { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.65rem; }
+.tm-board-agent-count { color: var(--tm-accent); font-weight: 600; }
+
 /* PR action buttons + prompt editing */
 .tm-btn-sm { padding: 0.25rem 0.6rem; font-size: 0.7rem; }
 .tm-prompt-edit {
@@ -544,21 +565,21 @@ function boardCard(group) {
   // Active agent conversation badge (durable state, survives reloads)
   const d = main.dispatch;
   if (d?.conversation_id) {
+    const runs = _allRuns(d);
+    const latest = runs[0];
+    const meta = _actionMeta(latest.action);
+    const st = _statusMeta(latest.status);
     const agentA = document.createElement("a");
-    agentA.href = d.conversation_url || `/conversations/${d.conversation_id}`;
+    agentA.href = latest.conversation_url || `/conversations/${latest.conversation_id}`;
     agentA.target = "_blank"; agentA.rel = "noopener";
     const b = document.createElement("span");
     b.className = "tm-board-badge agent";
-    b.textContent = `agent: ${d.status || "running"}`;
-    b.title = `Action: ${d.action || "unknown"}`;
+    b.textContent = runs.length > 1
+      ? `${meta.icon} ${runs.length} runs (${st.label})`
+      : `${meta.icon} ${st.label}`;
+    b.title = runs.map((r) => `${_actionMeta(r.action).label}: ${r.status}`).join("\n");
     agentA.append(b);
     meta.append(agentA);
-    // Past actions on this item
-    for (const h of d.action_history || []) {
-      const s = document.createElement("span");
-      s.textContent = `↳ ${h.action} (${h.status})`;
-      meta.append(s);
-    }
   }
 
   // Linked PR rows (implementation of the ticket)
@@ -868,6 +889,144 @@ async function renderPRs(view, host) {
   view.replaceChildren(frag);
 }
 
+const ACTION_META = {
+  "create-ticket": { icon: "🎫", label: "Create ticket" },
+  "fix-ci": { icon: "🔧", label: "Fix CI" },
+  "resolve-threads": { icon: "💬", label: "Resolve threads" },
+  "resolve-conflicts": { icon: "🔀", label: "Resolve conflicts" },
+  "prompt-helper": { icon: "🚀", label: "Prompt helper" },
+  "fix-issue": { icon: "📋", label: "Fix issue" },
+  "address-review": { icon: "👁", label: "Address review" },
+  "triage": { icon: "🔍", label: "Triage" },
+};
+
+function _actionMeta(key) {
+  return ACTION_META[key] || { icon: "🤖", label: key || "agent" };
+}
+
+function _statusMeta(status) {
+  const s = (status || "running").toLowerCase();
+  if (s === "completed" || s === "done" || s === "success") return { cls: "completed", label: "done" };
+  if (s === "failed" || s === "error") return { cls: "failed", label: "failed" };
+  return { cls: "running", label: "running" };
+}
+
+function _relativeTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/** Compact inline badge for the meta row (used when there's only 1 run). */
+function renderAgentActivityBadge(dispatch) {
+  const runs = _allRuns(dispatch);
+  if (!runs.length) return null;
+  const span = document.createElement("span");
+  span.className = "tm-board-agent";
+  const latest = runs[0];
+  const meta = _actionMeta(latest.action);
+  const st = _statusMeta(latest.status);
+  const dot = document.createElement("span");
+  dot.className = `tm-agent-run-status-dot ${st.cls}`;
+  span.append(dot);
+  if (runs.length > 1) {
+    const count = document.createElement("span");
+    count.className = "tm-board-agent-count";
+    count.textContent = `${runs.length} agent runs`;
+    span.append(count);
+  } else {
+    span.append(document.createTextNode(`${meta.icon} ${st.label}`));
+  }
+  return span;
+}
+
+/** Full activity section: one row per conversation, newest first. */
+function renderAgentActivity(item) {
+  const d = item.dispatch;
+  if (!d?.conversation_id) return null;
+  const runs = _allRuns(d);
+  if (!runs.length) return null;
+
+  const container = document.createElement("div");
+  container.className = "tm-agent-activity";
+
+  for (const run of runs) {
+    const meta = _actionMeta(run.action);
+    const st = _statusMeta(run.status);
+    const url = run.conversation_url || (run.conversation_id ? `/conversations/${run.conversation_id}` : null);
+
+    const row = document.createElement("div");
+    row.className = "tm-agent-run";
+
+    const icon = document.createElement("span");
+    icon.className = "tm-agent-run-icon";
+    icon.textContent = meta.icon;
+    row.append(icon);
+
+    const label = document.createElement("span");
+    label.className = "tm-agent-run-label";
+    label.textContent = meta.label;
+    row.append(label);
+
+    const status = document.createElement("span");
+    status.className = `tm-agent-run-status ${st.cls}`;
+    const dot = document.createElement("span");
+    dot.className = `tm-agent-run-status-dot ${st.cls}`;
+    status.append(dot, document.createTextNode(st.label));
+    row.append(status);
+
+    const time = document.createElement("span");
+    time.className = "tm-agent-run-time";
+    time.textContent = _relativeTime(run.started_at);
+    row.append(time);
+
+    if (url) {
+      const link = document.createElement("a");
+      link.className = "tm-agent-run-link";
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "Open →";
+      row.append(link);
+    }
+
+    container.append(row);
+  }
+
+  return container;
+}
+
+/** Collect all agent runs for an item: current dispatch + action_history, deduped, newest first. */
+function _allRuns(dispatch) {
+  const runs = [];
+  const seen = new Set();
+  // Current/latest dispatch
+  if (dispatch.conversation_id) {
+    runs.push({
+      action: dispatch.action,
+      conversation_id: dispatch.conversation_id,
+      conversation_url: dispatch.conversation_url,
+      status: dispatch.status,
+      started_at: dispatch.last_checked_at,
+    });
+    seen.add(dispatch.conversation_id);
+  }
+  // History (older runs)
+  for (const h of dispatch.action_history || []) {
+    if (h.conversation_id && !seen.has(h.conversation_id)) {
+      seen.add(h.conversation_id);
+      runs.push(h);
+    }
+  }
+  return runs;
+}
+
 function prRow(item, host) {
   const row = document.createElement("div");
   row.className = "tm-item";
@@ -887,15 +1046,9 @@ function prRow(item, host) {
   meta.className = "tm-item-meta";
   meta.append(badge("PR", "source-github-pr"));
 
-  // Previously dispatched conversation on this item (from durable state)
+  // Previously dispatched conversations on this item (from durable state)
   if (item.dispatch?.conversation_id) {
-    const convoA = document.createElement("a");
-    convoA.href = item.dispatch.conversation_url || `/conversations/${item.dispatch.conversation_id}`;
-    convoA.target = "_blank";
-    convoA.rel = "noopener";
-    convoA.append(badge(`🤖 agent: ${item.dispatch.status || "running"}`, "badge-state-in-progress"));
-    convoA.title = `Action: ${item.dispatch.action || "unknown"}`;
-    meta.append(convoA);
+    meta.append(renderAgentActivityBadge(item.dispatch));
   }
   if (item.identifier) meta.append(badge(`#${item.identifier}`, ""));
   if (item.repo) { const s = document.createElement("span"); s.textContent = item.repo; meta.append(s); }
@@ -1107,6 +1260,10 @@ function prRow(item, host) {
     actions.append(msg);
     body.append(actions);
   }
+
+  // Agent activity section: shows all conversations (current + history) for this PR
+  const activity = renderAgentActivity(item);
+  if (activity) body.append(activity);
 
   return row;
 }
