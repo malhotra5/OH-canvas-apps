@@ -79,6 +79,10 @@ class ActiveSet(BaseModel):
     set_id: str
 
 
+class ActionTemplateUpdate(BaseModel):
+    template_id: str
+
+
 class PreviewRequest(BaseModel):
     body: str
     variables: dict[str, Any] = {}
@@ -259,6 +263,16 @@ def delete_template(set_id: str, template_id: str):
 @app.put("/prompts/active")
 def set_active_set(req: ActiveSet):
     return prompts.set_active(req.set_id)
+
+
+@app.get("/prompts/action-map")
+def get_action_map():
+    return prompts.get_action_map()
+
+
+@app.put("/prompts/action-map/{action}")
+def set_action_template(action: str, req: ActionTemplateUpdate):
+    return prompts.set_action_template(action, req.template_id)
 
 
 @app.post("/prompts/preview")

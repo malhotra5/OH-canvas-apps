@@ -119,6 +119,11 @@ DEFAULT_SETS = {
         }
     ],
     "active_set_id": "default",
+    "action_map": {
+        "create-ticket": "create-ticket",
+        "fix-ci": "fix-ci",
+        "resolve-threads": "resolve-threads",
+    },
 }
 
 
@@ -149,6 +154,15 @@ class PromptStore:
             for tid, tmpl in default_by_id.items():
                 if tid not in existing_ids:
                     s.setdefault("templates", []).append(json.loads(json.dumps(tmpl)))
+                    changed = True
+        # Merge action_map defaults for actions not yet mapped
+        if "action_map" not in data:
+            data["action_map"] = json.loads(json.dumps(DEFAULT_SETS["action_map"]))
+            changed = True
+        else:
+            for action, tmpl_id in DEFAULT_SETS["action_map"].items():
+                if action not in data["action_map"]:
+                    data["action_map"][action] = tmpl_id
                     changed = True
         if changed:
             self._write(data)
@@ -241,6 +255,15 @@ class PromptStore:
         data["active_set_id"] = set_id
         self._write(data)
         return data
+
+    def get_action_map(self) -> dict:
+        return self._read().get("action_map", {})
+
+    def set_action_template(self, action: str, template_id: str) -> dict:
+        data = self._read()
+        data.setdefault("action_map", {})[action] = template_id
+        self._write(data)
+        return data["action_map"]
 
     def render(self, body: str, variables: dict[str, Any]) -> str:
         return _render(body, variables)

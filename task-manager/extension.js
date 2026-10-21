@@ -16,6 +16,13 @@ const SECRET_HEADERS = {
   posthog: "X-Posthog-Key",
 };
 
+// Action keys → human labels (shown on Settings action-map editor)
+const ACTIONS = [
+  { key: "create-ticket", label: "🎫 Create linked ticket", description: "PR with no linked issue — search for existing or create new" },
+  { key: "fix-ci", label: "🔧 Fix failing CI", description: "PR with failing checks — diagnose and fix" },
+  { key: "resolve-threads", label: "💬 Resolve review comments", description: "PR with unresolved review threads" },
+];
+
 const STYLES = `
 .tm-root {
   --tm-bg: var(--oh-color-base, #111);
@@ -77,6 +84,17 @@ const STYLES = `
 }
 .tm-del-btn { padding: 0.1rem 0.4rem; font-size: 0.72rem; border-radius: 6px; }
 .tm-del-btn:hover { color: var(--tm-danger); border-color: var(--tm-danger); }
+.tm-badge.tmpl-id { font-size: 0.62rem; color: var(--tm-muted); border-color: var(--tm-border); opacity: 0.7; }
+.tm-action-map-row {
+  display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem 0;
+  border-bottom: 1px solid var(--tm-border); font-size: 0.8rem;
+}
+.tm-action-map-row .action-label { font-weight: 500; flex: 1; }
+.tm-action-map-row .action-desc { font-size: 0.68rem; color: var(--tm-muted); }
+.tm-action-map-select {
+  padding: 0.3rem 0.5rem; font-size: 0.72rem; background: var(--tm-card); color: var(--tm-text);
+  border: 1px solid var(--tm-border); border-radius: 6px; font-family: inherit; min-width: 14rem;
+}
 .tm-actions-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; align-items: center; }
 .tm-action-btn {
   padding: 0.25rem 0.7rem; font-size: 0.72rem; font-weight: 500; border: 1px solid var(--tm-border);
@@ -287,14 +305,16 @@ async function createConversation(host, message, title) {
 
 /**
  * Render a prompt template ({{var}} substitution) + dispatch an agent conversation for an item.
- * Loads the active prompt set from the daemon, finds the template by id, renders it
- * with the item's fields, and creates a Canvas conversation that runs it.
+ * Loads the active prompt set + action map from the daemon, resolves the action's
+ * assigned template id, renders it with the item's fields, and creates a conversation.
  */
-async function dispatchPromptForItem(host, item, templateId, { extraVars = {}, title = "", tracker = null } = {}) {
+async function dispatchPromptForItem(host, item, actionKey, { extraVars = {}, title = "", tracker = null } = {}) {
   const data = await daemonFetch("/prompts");
   const activeSet = (data.sets || []).find((s) => s.id === data.active_set_id) || (data.sets || [])[0];
+  const actionMap = data.action_map || {};
+  const templateId = actionMap[actionKey] || actionKey;
   const tmpl = (activeSet?.templates || []).find((t) => t.id === templateId);
-  if (!tmpl) throw new Error(`Prompt template "${templateId}" not found in active set "${activeSet?.name}"`);
+  if (!tmpl) throw new Error(`No template assigned to action "${actionKey}" (looked for id "${templateId}" in set "${activeSet?.name}"). Set it in Settings.`);
 
   // Variables available to templates
   const vars = {
@@ -872,6 +892,73 @@ async function renderSettings(view, host) {
   refreshBtn.textContent = "Refresh tasks";
   btnRow.append(saveBtn, refreshBtn);
   formCard.append(btnRow);
+
+  // ── Action → prompt mapping card ───────────────────────────────
+  let promptData = null;
+  try { promptData = await daemonFetch("/prompts"); }
+  catch { /* daemon may be down — skip the card */ }
+
+  if (promptData) {
+    const activeSet = (promptData.sets || []).find((s) => s.id === promptData.active_set_id) || (promptData.sets || [])[0];
+    const allTemplates = activeSet?.templates || [];
+    const actionMap = promptData.action_map || {};
+
+    const mapCard = document.createElement("div");
+    mapCard.className = "tm-card";
+    mapCard.append(Object.assign(document.createElement("div"), {
+      className: "tm-card-title",
+      textContent: "Action → prompt mapping",
+    }));
+    const mapDesc = document.createElement("p");
+    mapDesc.style.cssText = "font-size:0.7rem;color:var(--tm-muted);margin:0 0 0.75rem;";
+    mapDesc.textContent = `Controls which prompt template is used when each PR action button is clicked. Active set: ${activeSet?.name || "none"}.`;
+    mapCard.append(mapDesc);
+
+    for (const action of ACTIONS) {
+      const row = document.createElement("div");
+      row.className = "tm-action-map-row";
+      const left = document.createElement("div");
+      left.style.cssText = "flex:1;";
+      left.append(Object.assign(document.createElement("div"), { className: "action-label", textContent: action.label }));
+      left.append(Object.assign(document.createElement("div"), { className: "action-desc", textContent: action.description }));
+      const select = document.createElement("select");
+      select.className = "tm-action-map-select";
+      const currentTid = actionMap[action.key] || "";
+      for (const t of allTemplates) {
+        const opt = document.createElement("option");
+        opt.value = t.id;
+        opt.textContent = `${t.title} (${t.id})`;
+        if (t.id === currentTid) opt.selected = true;
+        select.append(opt);
+      }
+      if (!currentTid || !allTemplates.some((t) => t.id === currentTid)) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "— unassigned —";
+        opt.selected = true;
+        select.prepend(opt);
+      }
+      const statusMsg = document.createElement("span");
+      statusMsg.style.cssText = "font-size:0.68rem;color:var(--tm-muted);";
+      select.addEventListener("change", async () => {
+        statusMsg.textContent = "Saving…";
+        try {
+          await daemonFetch(`/prompts/action-map/${action.key}`, {
+            method: "PUT",
+            body: JSON.stringify({ template_id: select.value }),
+          });
+          statusMsg.textContent = "✓";
+          setTimeout(() => { statusMsg.textContent = ""; }, 2000);
+        } catch (e) {
+          statusMsg.textContent = `✗ ${e.message}`;
+        }
+      });
+      row.append(left, select, statusMsg);
+      mapCard.append(row);
+    }
+    frag.append(mapCard);
+  }
+
   frag.append(formCard);
   view.replaceChildren(frag);
 
@@ -958,65 +1045,64 @@ async function renderPrompts(view, host) {
       for (const tmpl of set.templates) {
         const row = document.createElement("div");
         row.style.cssText = "padding:0.5rem 0;border-bottom:1px solid var(--tm-border);font-size:0.8rem;";
-        const name = document.createElement("div");
-        name.style.cssText = "display:flex;align-items:center;gap:0.5rem;flex:1;";
-        name.style.fontWeight = "500";
-        name.textContent = tmpl.title;
 
-        // Delete button (inline, on the title row)
+        // Header row: title + template id badge + delete + collapse toggle
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;align-items:center;gap:0.5rem;cursor:pointer;";
+        const name = document.createElement("div");
+        name.style.cssText = "font-weight:500;flex:1;";
+        name.textContent = tmpl.title;
+        const idBadge = badge(`id: ${tmpl.id}`, "tmpl-id");
         const delBtn = document.createElement("button");
         delBtn.className = "tm-action-btn tm-del-btn";
         delBtn.textContent = "🗑";
         delBtn.title = "Delete template";
-        delBtn.addEventListener("click", async () => {
-          if (!confirm(`Delete template "${tmpl.title}"? This cannot be undone.`)) return;
-          delBtn.disabled = true;
-          try {
-            await daemonFetch(`/prompts/sets/${set.id}/templates/${tmpl.id}`, { method: "DELETE" });
-            renderPrompts(view, host);
-          } catch (e) {
-            alert(`Delete failed: ${e.message}`);
-            delBtn.disabled = false;
-          }
-        });
+        const caret = document.createElement("span");
+        caret.style.cssText = "font-size:0.7rem;color:var(--tm-muted);";
+        caret.textContent = "▸";
+        header.append(caret, name, idBadge, delBtn);
+        row.append(header);
 
-        const titleRow = document.createElement("div");
-        titleRow.style.cssText = "display:flex;align-items:center;gap:0.5rem;";
-        titleRow.append(name, delBtn);
+        // Collapsible details
+        const details = document.createElement("div");
+        details.style.cssText = "display:none;flex-direction:column;gap:0.4rem;margin-top:0.4rem;";
+        header.addEventListener("click", (e) => {
+          if (e.target === delBtn) return;
+          const open = details.style.display === "none";
+          details.style.display = open ? "flex" : "none";
+          caret.textContent = open ? "▾" : "▸";
+        });
 
         // Editable title + applies_to
         const editMeta = document.createElement("div");
-        editMeta.style.cssText = "display:flex;gap:0.5rem;margin-top:0.3rem;align-items:center;flex-wrap:wrap;";
+        editMeta.style.cssText = "display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;";
         const titleInput = document.createElement("input");
         titleInput.type = "text";
         titleInput.value = tmpl.title;
         titleInput.className = "tm-prompt-field";
-        titleInput.title = "Template title";
+        titleInput.placeholder = "Template title";
         const appliesInput = document.createElement("input");
         appliesInput.type = "text";
         appliesInput.value = (tmpl.applies_to || []).join(", ");
         appliesInput.className = "tm-prompt-field";
-        appliesInput.title = "applies_to: comma-separated sources (linear, github-issue, github-review, github-pr)";
         appliesInput.placeholder = "applies to (csv)";
         editMeta.append(titleInput, appliesInput);
 
-        // Editable template body + save
+        // Editable body
         const bodyArea = document.createElement("textarea");
         bodyArea.className = "tm-prompt-edit";
         bodyArea.value = tmpl.body;
         bodyArea.rows = Math.min(12, Math.max(4, Math.ceil(tmpl.body.length / 60)));
 
+        // Save only (no reset)
         const actions = document.createElement("div");
         actions.style.cssText = "display:flex;gap:0.5rem;margin-top:0.4rem;align-items:center;";
         const saveBtn = document.createElement("button");
         saveBtn.className = "tm-btn tm-btn-sm";
         saveBtn.textContent = "Save";
-        const resetBtn = document.createElement("button");
-        resetBtn.className = "tm-btn tm-btn-secondary tm-btn-sm";
-        resetBtn.textContent = "Reset";
         const statusMsg = document.createElement("span");
         statusMsg.style.cssText = "font-size:0.7rem;color:var(--tm-muted);";
-        actions.append(saveBtn, resetBtn, statusMsg);
+        actions.append(saveBtn, statusMsg);
 
         saveBtn.addEventListener("click", async () => {
           saveBtn.disabled = true;
@@ -1038,15 +1124,22 @@ async function renderPrompts(view, host) {
           }
           saveBtn.disabled = false;
         });
-        resetBtn.addEventListener("click", () => {
-          titleInput.value = tmpl.title;
-          appliesInput.value = (tmpl.applies_to || []).join(", ");
-          bodyArea.value = tmpl.body;
-          statusMsg.textContent = "reverted";
-          setTimeout(() => { statusMsg.textContent = ""; }, 2500);
+
+        delBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Delete template "${tmpl.title}"? This cannot be undone.`)) return;
+          delBtn.disabled = true;
+          try {
+            await daemonFetch(`/prompts/sets/${set.id}/templates/${tmpl.id}`, { method: "DELETE" });
+            renderPrompts(view, host);
+          } catch (err) {
+            alert(`Delete failed: ${err.message}`);
+            delBtn.disabled = false;
+          }
         });
 
-        row.append(titleRow, editMeta, bodyArea, actions);
+        details.append(editMeta, bodyArea, actions);
+        row.append(details);
         card.append(row);
       }
     } else {
@@ -1063,6 +1156,10 @@ async function renderPrompts(view, host) {
 
     const newFields = document.createElement("div");
     newFields.style.cssText = "display:none;margin-top:0.6rem;flex-direction:column;gap:0.4rem;";
+    const newId = document.createElement("input");
+    newId.type = "text";
+    newId.placeholder = "Template ID (e.g. my-custom-prompt)";
+    newId.className = "tm-prompt-field";
     const newTitle = document.createElement("input");
     newTitle.type = "text";
     newTitle.placeholder = "Template title";
@@ -1086,19 +1183,19 @@ async function renderPrompts(view, host) {
     const newStatus = document.createElement("span");
     newStatus.style.cssText = "font-size:0.7rem;color:var(--tm-muted);";
     newActions.append(newSaveBtn, newCancelBtn, newStatus);
-    newFields.append(newTitle, newApplies, newBody, newActions);
+    newFields.append(newId, newTitle, newApplies, newBody, newActions);
     newForm.append(newFields);
 
     newToggle.addEventListener("click", () => {
       const show = newFields.style.display === "none";
       newFields.style.display = show ? "flex" : "none";
       newToggle.textContent = show ? "－ Cancel" : "＋ New template";
-      if (show) newTitle.focus();
+      if (show) newId.focus();
     });
     newCancelBtn.addEventListener("click", () => {
       newFields.style.display = "none";
       newToggle.textContent = "＋ New template";
-      newTitle.value = ""; newApplies.value = ""; newBody.value = ""; newStatus.textContent = "";
+      newId.value = ""; newTitle.value = ""; newApplies.value = ""; newBody.value = ""; newStatus.textContent = "";
     });
 
     newSaveBtn.addEventListener("click", async () => {
@@ -1106,11 +1203,15 @@ async function renderPrompts(view, host) {
         newStatus.textContent = "Title and body are required.";
         return;
       }
+      if (!newId.value.trim()) {
+        newStatus.textContent = "Template ID is required.";
+        return;
+      }
       newSaveBtn.disabled = true;
       newStatus.textContent = "Creating…";
       try {
         const appliesTo = newApplies.value.split(",").map((s) => s.trim()).filter(Boolean);
-        await daemonFetch(`/prompts/sets/${set.id}/templates`, {
+        const created = await daemonFetch(`/prompts/sets/${set.id}/templates`, {
           method: "POST",
           body: JSON.stringify({
             title: newTitle.value.trim(),
@@ -1118,6 +1219,17 @@ async function renderPrompts(view, host) {
             ...(appliesTo.length ? { applies_to: appliesTo } : {}),
           }),
         });
+        // If the user specified a custom ID, rename the auto-generated one via replace_all
+        const desiredId = newId.value.trim();
+        if (desiredId && created.id !== desiredId) {
+          const all = await daemonFetch("/prompts");
+          for (const s of all.sets || []) {
+            for (const t of s.templates || []) {
+              if (t.id === created.id) t.id = desiredId;
+            }
+          }
+          await daemonFetch("/prompts", { method: "PUT", body: JSON.stringify(all) });
+        }
         renderPrompts(view, host);
       } catch (e) {
         newStatus.textContent = `✗ ${e.message}`;
