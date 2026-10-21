@@ -1000,8 +1000,8 @@ function prRow(item, host) {
       launched = true;
       // Persist the action so the convo link survives reloads
       if (pendingSave) pendingSave(result);
-      // navigate to the conversation after a beat
-      setTimeout(() => host.navigate(result.url), 800);
+      // open the conversation in a new tab so the task manager stays open
+      setTimeout(() => window.open(result.url, "_blank", "noopener"), 800);
     }).catch((e) => {
       msg.className = "tm-action-msg err";
       msg.textContent = e.message;
@@ -1613,8 +1613,8 @@ async function renderPrompts(view, host) {
       link.style.cssText = "color:var(--tm-accent);font-size:0.75rem;";
       link.textContent = "Open conversation →";
       launchMsg.querySelector(".tm-msg").append(link);
-      // Navigate to it
-      host.navigate(result.url);
+      // Open conversation in a new tab
+      window.open(result.url, "_blank", "noopener");
     } catch (e) {
       launchMsg.replaceChildren(msgEl("err", e.message));
     }
