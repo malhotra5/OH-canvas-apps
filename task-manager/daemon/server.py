@@ -9,7 +9,9 @@ GitHub also falls back to `gh auth token` if no key header is provided.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -100,17 +102,19 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/tasks")
-def get_tasks(
-    linear_key: str | None = Header(None, alias=LINEAR_HEADER),
-    github_key: str | None = Header(None, alias=GITHUB_HEADER),
-):
-    """Fetch and merge items from all configured providers, sorted by priority."""
+# ── Task cache ───────────────────────────────────────────────────────────
+
+CACHE_TTL_SECONDS = 300
+_cache: dict = {"key": None, "items": [], "errors": None, "fetched_at": 0.0}
+
+
+def _cache_key(linear_key: str | None, gh_key: str | None) -> str:
+    return hashlib.sha256(f"{linear_key or ''}|{gh_key or ''}".encode()).hexdigest()
+
+
+def _fetch_fresh(linear_key: str | None, gh_key: str | None, github_header_key: str | None) -> tuple[list[dict], list[dict] | None]:
     all_items: list[dict] = []
     errors: list[dict] = []
-
-    # GitHub: use header key, or fall back to `gh auth token`
-    gh_key = github_key or _gh_token()
 
     if linear_key:
         try:
@@ -122,10 +126,10 @@ def get_tasks(
         try:
             all_items.extend(github_provider.fetch_all(gh_key))
         except Exception as e:
-            # If the provided token fails with 401, try `gh auth token` fallback
-            if "401" in str(e) and github_key:
+            # If the header key fails with 401, fall back to `gh auth token`
+            if "401" in str(e) and github_header_key:
                 gh_fallback = _gh_token()
-                if gh_fallback and gh_fallback != github_key:
+                if gh_fallback and gh_fallback != github_header_key:
                     try:
                         all_items.extend(github_provider.fetch_all(gh_fallback))
                     except Exception as e2:
@@ -135,8 +139,36 @@ def get_tasks(
             else:
                 errors.append({"source": "github", "error": str(e)})
 
+    return all_items, errors or None
+
+
+@app.get("/tasks")
+def get_tasks(
+    refresh: bool = False,
+    linear_key: str | None = Header(None, alias=LINEAR_HEADER),
+    github_key: str | None = Header(None, alias=GITHUB_HEADER),
+):
+    """Fetch and merge items from all configured providers, sorted by priority.
+
+    Results are cached for 5 minutes keyed on the API keys; pass
+    ?refresh=true to force a fresh fetch.
+    """
+    gh_key = github_key or _gh_token()
+
     if not linear_key and not gh_key:
         return {"items": [], "errors": [], "message": "No API keys provided. Set them in Settings or run `gh auth login`."}
+
+    key = _cache_key(linear_key, gh_key)
+    fresh = (
+        _cache["key"] == key
+        and time.time() - _cache["fetched_at"] < CACHE_TTL_SECONDS
+    )
+    if refresh or not fresh:
+        items, errors = _fetch_fresh(linear_key, gh_key, github_key)
+        _cache.update(key=key, items=items, errors=errors, fetched_at=time.time())
+
+    all_items = _cache["items"]
+    errors = _cache["errors"]
 
     # Sort: priority rank, then source rank (reviews first), then updated_at desc
     source_rank = {"github-review": 0, "linear": 1, "github-issue": 2, "github-pr": 3}

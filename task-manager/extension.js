@@ -47,6 +47,7 @@ const STYLES = `
 }
 .tm-tab:hover { color: var(--tm-text); background: rgba(255,255,255,0.05); }
 .tm-tab.active { color: var(--tm-accent); background: rgba(79,158,255,0.12); }
+.tm-refresh-btn { padding: 0.3rem 0.7rem; font-size: 0.72rem; }
 .tm-view { flex: 1; overflow-y: auto; padding: 1.5rem; }
 
 .tm-card { border: 1px solid var(--tm-border); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; background: var(--tm-card); }
@@ -156,13 +157,24 @@ async function daemonFetch(path, opts = {}) {
   return resp.json();
 }
 
-async function fetchTasks(host) {
+// Client-side cache: reuse a fetch made within the last 60s unless forced.
+// (The daemon separately caches provider results for 5 minutes.)
+const taskCache = { data: null, fetchedAt: 0 };
+const TASK_CACHE_MS = 60_000;
+
+async function fetchTasks(host, { refresh = false } = {}) {
+  if (!refresh && taskCache.data && Date.now() - taskCache.fetchedAt < TASK_CACHE_MS) {
+    return taskCache.data;
+  }
   const secrets = await readSecrets(host);
   const headers = {};
   for (const [provider, val] of Object.entries(secrets)) {
     if (val) headers[SECRET_HEADERS[provider]] = val;
   }
-  return daemonFetch("/tasks", { headers });
+  const data = await daemonFetch(`/tasks?refresh=${refresh ? "true" : "false"}`, { headers });
+  taskCache.data = data;
+  taskCache.fetchedAt = Date.now();
+  return data;
 }
 
 /** Create a Canvas conversation via host.agentServer */
@@ -646,7 +658,14 @@ export function activate(host) {
     title.textContent = "Task Manager";
     const tabs = document.createElement("div");
     tabs.className = "tm-tabs";
-    header.append(title, tabs);
+
+    // Refresh button: forces a fresh provider fetch, bypassing both caches
+    const refreshBtn = document.createElement("button");
+    refreshBtn.className = "tm-btn tm-btn-secondary tm-refresh-btn";
+    refreshBtn.textContent = "↻ Refresh";
+    refreshBtn.title = "Fetch fresh data from Linear & GitHub";
+
+    header.append(title, tabs, refreshBtn);
     root.append(header);
 
     const view = document.createElement("div");
@@ -673,6 +692,18 @@ export function activate(host) {
       else if (active === "prompts") renderPrompts(view, host);
       else if (active === "settings") renderSettings(view, host);
     }
+
+    refreshBtn.addEventListener("click", async () => {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = "↻ Refreshing…";
+      taskCache.data = null;
+      taskCache.fetchedAt = 0;
+      // Fetch with refresh=true before re-rendering so views show fresh data
+      try { await fetchTasks(host, { refresh: true }); } catch { /* views show errors */ }
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "↻ Refresh";
+      render();
+    });
 
     render();
     return () => root.remove();
