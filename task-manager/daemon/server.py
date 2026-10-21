@@ -416,6 +416,30 @@ def _build_board(items: list[dict]) -> list[dict]:
         if t["source"] == "github-issue":
             gh_by_ref[f"{t['repo']}#{t['identifier']}"] = t
             gh_by_ref[t["identifier"]] = t
+    # Linear tickets: index by GitHub attachment URLs (PR or issue links from Linear UI)
+    linear_by_pr: dict[tuple, list[dict]] = {}
+    linear_by_issue_ref: dict[str, list[dict]] = {}
+    for t in tickets:
+        if t["source"] == "linear":
+            for link in t.get("github_links", []) or []:
+                url = link.get("url", "")
+                # Match GitHub PR URLs: github.com/OWNER/REPO/pull/N
+                if "/pull/" in url:
+                    parts = url.rstrip("/").split("/")
+                    try:
+                        repo = f"{parts[-4]}/{parts[-3]}"
+                        num = parts[-1]
+                        linear_by_pr.setdefault((repo, int(num)), []).append(t)
+                    except (IndexError, ValueError):
+                        pass
+                # Match GitHub issue URLs: github.com/OWNER/REPO/issues/N
+                elif "/issues/" in url:
+                    parts = url.rstrip("/").split("/")
+                    try:
+                        ref = f"{parts[-4]}/{parts[-3]}#{parts[-1]}"
+                        linear_by_issue_ref.setdefault(ref, []).append(t)
+                    except (IndexError, ValueError):
+                        pass
     # Reverse index: (repo, number) -> tickets, from dispatch-state linked PRs
     linked_ticket_by_pr: dict[tuple, list[dict]] = {}
     for t in tickets:
@@ -428,6 +452,11 @@ def _build_board(items: list[dict]) -> list[dict]:
         for ref in pr.get("linked_issues", []) or []:
             t = gh_by_ref.get(ref.get("ref", "")) or gh_by_ref.get(str(ref.get("number", "")))
             if t and t["id"] not in seen:
+                seen.add(t["id"])
+                matched.append(t)
+        # Match Linear tickets that have this PR linked as an attachment
+        for t in linear_by_pr.get((pr.get("repo", ""), int(pr["identifier"])), []):
+            if t["id"] not in seen:
                 seen.add(t["id"])
                 matched.append(t)
         for t in linked_ticket_by_pr.get((pr.get("repo", ""), int(pr["identifier"])), []):
