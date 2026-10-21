@@ -148,7 +148,12 @@ const STYLES = `
 .tm-issue-link { color: var(--tm-accent); text-decoration: none; }
 .tm-issue-link:hover { text-decoration: underline; }
 .tm-issue-link.closes { font-weight: 600; }
-.tm-priority-badge { color: #fff; padding: 0.05rem 0.35rem; border-radius: 3px; font-size: 0.65rem; font-weight: 700; }
+.tm-priority-badge { color: var(--tm-muted); padding: 0.05rem 0.35rem; border-radius: 3px; font-size: 0.65rem; font-weight: 700; background: transparent; border: 1px solid currentColor; }
+.tm-priority-badge.tm-priority-0 { color: var(--tm-danger); }
+.tm-priority-badge.tm-priority-1 { color: var(--tm-warn); }
+.tm-priority-badge.tm-priority-2 { color: var(--tm-accent); }
+.tm-priority-badge.tm-priority-3 { color: var(--tm-muted); }
+.tm-priority-badge.tm-priority-4 { color: var(--tm-muted); opacity: 0.7; }
 
 .tm-item {
   display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem 1rem;
