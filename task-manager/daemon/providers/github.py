@@ -59,6 +59,7 @@ query($query: String!) {
           url
           body
           isDraft
+          mergeable
           createdAt
           updatedAt
           repository { nameWithOwner }
@@ -308,6 +309,7 @@ def fetch_prs(token: str, username: str | None = None) -> list[dict]:
                 "repo": repo,
                 "labels": [],
                 "state": pr.get("isDraft") and "draft" or "open",
+                "mergeable": (pr.get("mergeable") or "UNKNOWN").lower(),
                 "ci_status": (ci_state or "NO_CHECKS").lower(),
                 "review_status": review_status,
                 "unresolved_threads": unresolved_count,

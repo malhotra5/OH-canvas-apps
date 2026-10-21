@@ -110,6 +110,28 @@ DEFAULT_SETS = {
                     ),
                 },
                 {
+                    "id": "resolve-conflicts",
+                    "title": "Resolve merge conflicts",
+                    "body": (
+                        "PR #{{identifier}} ({{url}}: \"{{title}}\") in {{repo}} has merge "
+                        "conflicts against its base branch.\n\n"
+                        "Steps:\n"
+                        "1. Check out the PR branch locally (or use `gh pr checkout {{identifier}}`).\n"
+                        "2. Fetch and merge the base branch (usually `main`) into the PR branch.\n"
+                        "3. For each conflicting file, resolve the conflict by keeping the correct "
+                        "changes from both sides. Prefer the intent of the PR unless the base branch "
+                        "introduced a breaking change that must be accommodated.\n"
+                        "4. Run the test suite (if one exists) to make sure the resolution didn't "
+                        "break anything.\n"
+                        "5. Commit the merge resolution and push.\n"
+                        "6. Verify via `gh pr view {{identifier}} --json mergeable` that the PR is "
+                        "now mergeable.\n\n"
+                        "PR description for context:\n{{body}}\n\n"
+                        "Report: which files conflicted, how each was resolved, test results, and "
+                        "the final mergeable state."
+                    ),
+                },
+                {
                     "id": "prompt-helper",
                     "title": "Prompt helper",
                     "body": (
@@ -138,6 +160,7 @@ DEFAULT_SETS = {
         "create-ticket": "create-ticket",
         "fix-ci": "fix-ci",
         "resolve-threads": "resolve-threads",
+        "resolve-conflicts": "resolve-conflicts",
         "prompt-helper": "prompt-helper",
     },
     # action -> agent profile id (empty string = use the account's active profile)
@@ -145,6 +168,7 @@ DEFAULT_SETS = {
         "create-ticket": "",
         "fix-ci": "",
         "resolve-threads": "",
+        "resolve-conflicts": "",
         "prompt-helper": "",
     },
 }

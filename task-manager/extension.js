@@ -21,6 +21,7 @@ const ACTIONS = [
   { key: "create-ticket", label: "🎫 Create linked ticket", description: "PR with no linked issue — search for existing or create new" },
   { key: "fix-ci", label: "🔧 Fix failing CI", description: "PR with failing checks — diagnose and fix" },
   { key: "resolve-threads", label: "💬 Resolve review comments", description: "PR with unresolved review threads" },
+  { key: "resolve-conflicts", label: "🔀 Resolve merge conflicts", description: "PR with merge conflicts against base branch" },
   { key: "prompt-helper", label: "🚀 Launch prompt helper", description: "Prompts page — launches an agent to help write prompt templates" },
 ];
 
@@ -175,6 +176,7 @@ const STYLES = `
 .tm-badge.ci-success { background: rgba(74,222,128,0.15); color: var(--tm-success); }
 .tm-badge.ci-failure { background: rgba(248,113,113,0.15); color: var(--tm-danger); }
 .tm-badge.ci-pending { background: rgba(251,191,36,0.15); color: var(--tm-warn); }
+.tm-badge.merge-conflict { background: rgba(248,113,113,0.15); color: var(--tm-danger); }
 .tm-badge.review-approved { background: rgba(74,222,128,0.15); color: var(--tm-success); }
 .tm-badge.review-changes_requested { background: rgba(248,113,113,0.15); color: var(--tm-danger); }
 .tm-badge.review-re-requested { background: rgba(251,191,36,0.15); color: var(--tm-warn); }
@@ -229,6 +231,7 @@ const STYLES = `
 .tm-board-badge.ci-success { color: var(--tm-success); border-color: rgba(74,222,128,0.4); }
 .tm-board-badge.ci-failure, .tm-board-badge.ci-error { color: var(--tm-danger); border-color: rgba(248,113,113,0.4); }
 .tm-board-badge.ci-pending { color: var(--tm-warn); border-color: rgba(250,204,21,0.4); }
+.tm-board-badge.conflict { color: var(--tm-danger); border-color: rgba(248,113,113,0.4); }
 .tm-board-badge.draft { color: var(--tm-muted); border-color: rgba(255,255,255,0.25); }
 .tm-board-badge.threads { color: var(--tm-warn); border-color: rgba(250,204,21,0.4); }
 .tm-board-badge.agent { color: var(--tm-accent); border-color: rgba(79,158,255,0.4); }
@@ -575,6 +578,7 @@ function boardCard(group) {
       const label = ci === "success" ? "CI ✓" : ci === "failure" || ci === "error" ? `CI ${ci}` : ci === "no_checks" ? "no CI" : `CI ${ci}`;
       badges.append(Object.assign(document.createElement("span"), { className: `tm-board-badge ci-${ci}`, textContent: label }));
     }
+    if (pr.mergeable === "conflicting") badges.append(Object.assign(document.createElement("span"), { className: "tm-board-badge conflict", textContent: "⚠ conflict" }));
     if (pr.state === "draft") badges.append(Object.assign(document.createElement("span"), { className: "tm-board-badge draft", textContent: "draft" }));
     if (pr.unresolved_threads) badges.append(Object.assign(document.createElement("span"), { className: "tm-board-badge threads", textContent: `${pr.unresolved_threads} unresolved` }));
     if (pr.review_status && pr.review_status !== "no_reviews") badges.append(Object.assign(document.createElement("span"), { className: "tm-board-badge", textContent: pr.review_status.replace(/-/g, " ") }));
@@ -904,6 +908,11 @@ function prRow(item, host) {
     : "⏳ CI pending";
   meta.append(badge(ciText, `ci-${item.ci_status}`));
 
+  // Merge conflict badge
+  if (item.mergeable === "conflicting") {
+    meta.append(badge("⚠ merge conflict", "merge-conflict"));
+  }
+
   // Review status badge
   const rs = item.review_status;
   const rsText = {
@@ -1055,7 +1064,26 @@ function prRow(item, host) {
     actions.append(btn);
   }
 
-  // 3) Unresolved review threads → resolve-threads
+  // 3) Merge conflicts → resolve-conflicts
+  if (item.mergeable === "conflicting") {
+    const btn = document.createElement("button");
+    btn.className = "tm-action-btn";
+    btn.textContent = "🔀 Resolve conflicts";
+    btn.addEventListener("click", () => {
+      if (launched) return;
+      launch(
+        dispatchPromptForItem(host, item, "resolve-conflicts", {
+          title: `🔀 Resolve merge conflicts on ${item.repo}#${item.identifier}`,
+        }),
+        "Conflict-resolver agent launched.",
+        "resolve-conflicts",
+        { progress_note: `resolve merge conflicts on ${item.repo}#${item.identifier}` },
+      );
+    });
+    actions.append(btn);
+  }
+
+  // 4) Unresolved review threads → resolve-threads
   if (item.unresolved_threads > 0) {
     const btn = document.createElement("button");
     btn.className = "tm-action-btn";
