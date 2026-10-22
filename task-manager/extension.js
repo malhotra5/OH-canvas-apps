@@ -22,8 +22,10 @@ const ACTIONS = [
   { key: "fix-ci", label: "🔧 Fix failing CI", description: "PR with failing checks — diagnose and fix" },
   { key: "resolve-threads", label: "💬 Resolve review comments", description: "PR with unresolved review threads" },
   { key: "resolve-conflicts", label: "🔀 Resolve merge conflicts", description: "PR with merge conflicts against base branch" },
-  { key: "guided-review", label: "👁 Guided review", description: "Pending review — agent walks me through the PR implementation step by step" },
-  { key: "auto-review", label: "🤖 Autonomous review", description: "Pending review — agent reviews the PR and posts results on GitHub" },
+  { key: "guided-review", label: "🗣 Guided review", description: "Pending review — agent walks me through the PR implementation step by step" },
+  { key: "auto-review", label: "🤖 Auto review", description: "Pending review — agent reviews the PR and posts results on GitHub" },
+  { key: "investigate", label: "🔍 Investigate", description: "Issue/ticket — investigate and report findings without implementing" },
+  { key: "fix-issue", label: "📋 Fix issue", description: "Issue/ticket — investigate, implement a fix, and open a PR" },
   { key: "prompt-helper", label: "🚀 Launch prompt helper", description: "Prompts page — launches an agent to help write prompt templates" },
 ];
 
@@ -685,12 +687,118 @@ async function renderTasks(view, host) {
     frag.append(emptyEl("No assigned issues found."));
   } else {
     frag.append(sectionHeader(filtered.length, "assigned issues"));
-    for (const item of filtered) frag.append(taskRow(item));
+    for (const item of filtered) frag.append(taskRow(item, host));
   }
   view.replaceChildren(frag);
 }
 
-function taskRow(item) {
+/**
+ * Shared action-button system.
+ *
+ * Creates a container with dispatch buttons + status message + agent activity.
+ * Each button click dispatches an agent conversation and persists it via
+ * saveDispatch so the conversation link survives page reloads.
+ *
+ * Usage:
+ *   const act = createActionContainer(host, item);
+ *   act.addButton({ key: "fix-issue", label: "📋 Fix issue", okText: "Fix-issue agent launched." });
+ *   act.addButton({ key: "triage", label: "🔍 Triage", okText: "Triage agent launched.", condition: () => true });
+ *   body.append(act.el);
+ *
+ * For buttons that need custom dispatch vars or a tracker picker, pass `onDispatch`:
+ *   act.addButton({
+ *     key: "create-ticket", label: "🎫 Create ticket",
+ *     onDispatch: (launch) => { ... show picker, then launch(...) ... },
+ *   });
+ */
+function createActionContainer(host, item) {
+  const el = document.createElement("div");
+  el.className = "tm-actions-row";
+  const msg = document.createElement("span");
+  msg.className = "tm-action-msg";
+  let launched = false;
+  let pendingSave = null;
+
+  function disableAll() {
+    el.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  }
+
+  function enableAll() {
+    el.querySelectorAll("button").forEach((b) => (b.disabled = false));
+  }
+
+  function launch(prom, okText, actionKey, extra = {}) {
+    disableAll();
+    pendingSave = (result) => saveDispatch(item, actionKey, result, extra);
+    msg.className = "tm-action-msg";
+    msg.textContent = "Launching agent conversation…";
+    prom.then((result) => {
+      msg.className = "tm-action-msg ok";
+      msg.replaceChildren(document.createTextNode(okText + " "));
+      const link = document.createElement("a");
+      link.href = result.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.style.cssText = "color:var(--tm-accent);";
+      link.textContent = "Open →";
+      msg.append(link);
+      launched = true;
+      if (pendingSave) pendingSave(result);
+      setTimeout(() => window.open(result.url, "_blank", "noopener"), 800);
+    }).catch((e) => {
+      msg.className = "tm-action-msg err";
+      msg.textContent = e.message;
+      enableAll();
+    });
+  }
+
+  function addButton(opts) {
+    const {
+      key: actionKey,
+      label,
+      okText = `${label} agent launched.`,
+      onDispatch,       // (launchFn) => void  — custom click handler
+      extraVars = {},   // merged into dispatchPromptForItem
+      title: titleText, // optional conversation title
+      progressNote,     // optional progress_note for saveDispatch
+    } = opts;
+
+    const btn = document.createElement("button");
+    btn.className = "tm-action-btn";
+    btn.textContent = label;
+
+    if (onDispatch) {
+      btn.addEventListener("click", () => {
+        if (launched) return;
+        onDispatch(launch);
+      });
+    } else {
+      btn.addEventListener("click", () => {
+        if (launched) return;
+        launch(
+          dispatchPromptForItem(host, item, actionKey, {
+            extraVars,
+            title: titleText || `${label} — ${item.repo || item.team || ""}#${item.identifier || ""}`,
+          }),
+          okText,
+          actionKey,
+          { progress_note: progressNote || `${label.toLowerCase()} on ${item.repo || ""}#${item.identifier || ""}` },
+        );
+      });
+    }
+    el.append(btn);
+  }
+
+  function render() {
+    if (el.childElementCount > 0) el.append(msg);
+    const activity = renderAgentActivity(item);
+    return activity;
+  }
+
+  return { el, msg, addButton, render, launch, isLaunched: () => launched };
+}
+
+function taskRow(item, host) {
   const row = document.createElement("div");
   row.className = "tm-item" + (item.is_subticket ? " tm-item-sub" : "");
   const dot = document.createElement("div");
@@ -763,6 +871,31 @@ function taskRow(item) {
     }
     body.append(ghEl);
   }
+
+  // Agent activity badge in meta (if previously dispatched)
+  if (item.dispatch?.conversation_id) {
+    meta.append(renderAgentActivityBadge(item.dispatch));
+  }
+
+  // ── Action buttons ─────────────────────────────────────────────────
+  const act = createActionContainer(host, item);
+  act.addButton({
+    key: "investigate",
+    label: "🔍 Investigate",
+    okText: "Investigation agent launched.",
+    title: `🔍 Investigate ${item.identifier || item.title}`,
+    progressNote: `investigate ${item.identifier || item.title}`,
+  });
+  act.addButton({
+    key: "fix-issue",
+    label: "📋 Fix issue",
+    okText: "Fix-issue agent launched.",
+    title: `📋 Fix ${item.identifier || item.title}`,
+    progressNote: `fix issue ${item.identifier || item.title}`,
+  });
+  const activity = act.render();
+  body.append(act.el);
+  if (activity) body.append(activity);
 
   row.append(dot, body);
   return row;
@@ -857,73 +990,33 @@ function reviewRow(item, host) {
     body.append(linksEl);
   }
 
+  // Agent activity badge in meta (if previously dispatched)
+  if (item.dispatch?.conversation_id) {
+    meta.append(renderAgentActivityBadge(item.dispatch));
+  }
+
   // ── Review action buttons (guided walkthrough / autonomous review) ─
-  const actions = document.createElement("div");
-  actions.className = "tm-actions-row";
-  const msg = document.createElement("span");
-  msg.className = "tm-action-msg";
-  let launched = false;
-  let pendingSave = null;
-
-  function disableAll() {
-    actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
-  }
-
-  function launch(prom, okText, actionKey, extraVars = {}) {
-    disableAll();
-    pendingSave = (result) => saveDispatch(item, actionKey, result, extraVars);
-    msg.className = "tm-action-msg";
-    msg.textContent = "Launching agent conversation…";
-    prom.then((result) => {
-      msg.className = "tm-action-msg ok";
-      msg.replaceChildren(document.createTextNode(okText + " "));
-      const link = document.createElement("a");
-      link.href = result.url;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.style.cssText = "color:var(--tm-accent);";
-      link.textContent = "Open →";
-      msg.append(link);
-      launched = true;
-      if (pendingSave) pendingSave(result);
-      setTimeout(() => window.open(result.url, "_blank", "noopener"), 800);
-    }).catch((e) => {
-      msg.className = "tm-action-msg err";
-      msg.textContent = e.message;
-      actions.querySelectorAll("button").forEach((b) => (b.disabled = false));
-    });
-  }
-
   // Review items only carry body_excerpt; use it as the {{body}} variable.
   const itemVars = { body: item.body_excerpt || item.body || "" };
-
-  const addReviewBtn = (actionKey, label, okText) => {
-    const btn = document.createElement("button");
-    btn.className = "tm-action-btn";
-    btn.textContent = label;
-    btn.addEventListener("click", () => {
-      if (launched) return;
-      launch(
-        dispatchPromptForItem(host, item, actionKey, {
-          extraVars: itemVars,
-          title: `${label} — ${item.repo}#${item.identifier}`,
-        }),
-        okText,
-        actionKey,
-        { progress_note: `${label.toLowerCase()} on ${item.repo}#${item.identifier}` },
-      );
-    });
-    actions.append(btn);
-  };
-
-  addReviewBtn("guided-review", "🗣 Guided review", "Guided-review agent launched.");
-  addReviewBtn("auto-review", "🤖 Auto review", "Auto-review agent launched.");
-
-  actions.append(msg);
-  body.append(actions);
-
-  // Agent activity section: shows all conversations (current + history) for this review
-  const activity = renderAgentActivity(item);
+  const act = createActionContainer(host, item);
+  act.addButton({
+    key: "guided-review",
+    label: "🗣 Guided review",
+    okText: "Guided-review agent launched.",
+    extraVars: itemVars,
+    title: `🗣 Guided review — ${item.repo}#${item.identifier}`,
+    progressNote: `guided review on ${item.repo}#${item.identifier}`,
+  });
+  act.addButton({
+    key: "auto-review",
+    label: "🤖 Auto review",
+    okText: "Auto-review agent launched.",
+    extraVars: itemVars,
+    title: `🤖 Auto review — ${item.repo}#${item.identifier}`,
+    progressNote: `auto review on ${item.repo}#${item.identifier}`,
+  });
+  const activity = act.render();
+  body.append(act.el);
   if (activity) body.append(activity);
 
   row.append(dot, body);
@@ -967,6 +1060,7 @@ const ACTION_META = {
   "resolve-conflicts": { icon: "🔀", label: "Resolve conflicts" },
   "prompt-helper": { icon: "🚀", label: "Prompt helper" },
   "fix-issue": { icon: "📋", label: "Fix issue" },
+  "investigate": { icon: "🔍", label: "Investigate" },
   "address-review": { icon: "👁", label: "Address review" },
   "triage": { icon: "🔍", label: "Triage" },
   "guided-review": { icon: "🗣", label: "Guided review" },
@@ -1202,145 +1296,79 @@ function prRow(item, host) {
   row.append(dot, body);
 
   // ── Status-driven action buttons ──────────────────────────────────
-  const actions = document.createElement("div");
-  actions.className = "tm-actions-row";
-  const msg = document.createElement("span");
-  msg.className = "tm-action-msg";
-  let launched = false;
-  let pendingSave = null;
-
-  function disableAll() {
-    actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
-  }
-
-  function launch(prom, okText, actionKey, extraVars = {}) {
-    disableAll();
-    pendingSave = (result) => saveDispatch(item, actionKey, result, extraVars);
-    msg.className = "tm-action-msg";
-    msg.textContent = "Launching agent conversation…";
-    prom.then((result) => {
-      msg.className = "tm-action-msg ok";
-      msg.replaceChildren(document.createTextNode(okText + " "));
-      const link = document.createElement("a");
-      link.href = result.url;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.style.cssText = "color:var(--tm-accent);";
-      link.textContent = "Open →";
-      msg.append(link);
-      launched = true;
-      // Persist the action so the convo link survives reloads
-      if (pendingSave) pendingSave(result);
-      // open the conversation in a new tab so the task manager stays open
-      setTimeout(() => window.open(result.url, "_blank", "noopener"), 800);
-    }).catch((e) => {
-      msg.className = "tm-action-msg err";
-      msg.textContent = e.message;
-      actions.querySelectorAll("button").forEach((b) => (b.disabled = false));
-    });
-  }
+  const act = createActionContainer(host, item);
 
   // 1) No linked issue → create-ticket (with tracker choice)
   if (!linked.length) {
-    const btn = document.createElement("button");
-    btn.className = "tm-action-btn";
-    btn.textContent = "🎫 Create ticket";
-    btn.addEventListener("click", () => {
-      if (launched) return;
-      // Replace the button row with the tracker choice UI
-      actions.replaceChildren();
-      const choice = document.createElement("div");
-      choice.className = "tm-tracker-choice";
-      const label = document.createElement("span");
-      label.textContent = "Where should the ticket go?";
-      const linBtn = document.createElement("button");
-      linBtn.textContent = "Linear only";
-      const ghBtn = document.createElement("button");
-      ghBtn.textContent = "GitHub (auto-syncs to Linear)";
-      choice.append(label, linBtn, ghBtn);
-      actions.append(choice, msg);
-      const pick = (tracker) => {
-        launch(
-          dispatchPromptForItem(host, item, "create-ticket", {
-            tracker,
-            title: `🎫 Create ticket for ${item.repo}#${item.identifier}`,
-          }),
-          "Ticket agent launched.",
-          "create-ticket",
-          { progress_note: `create ticket on ${tracker}` },
-        );
-      };
-      linBtn.addEventListener("click", () => pick("linear"));
-      ghBtn.addEventListener("click", () => pick("github"));
+    act.addButton({
+      key: "create-ticket",
+      label: "🎫 Create ticket",
+      onDispatch: (launch) => {
+        // Replace the button row with the tracker choice UI
+        act.el.replaceChildren();
+        const choice = document.createElement("div");
+        choice.className = "tm-tracker-choice";
+        const label = document.createElement("span");
+        label.textContent = "Where should the ticket go?";
+        const linBtn = document.createElement("button");
+        linBtn.textContent = "Linear only";
+        const ghBtn = document.createElement("button");
+        ghBtn.textContent = "GitHub (auto-syncs to Linear)";
+        choice.append(label, linBtn, ghBtn);
+        act.el.append(choice, act.msg);
+        const pick = (tracker) => {
+          launch(
+            dispatchPromptForItem(host, item, "create-ticket", {
+              tracker,
+              title: `🎫 Create ticket for ${item.repo}#${item.identifier}`,
+            }),
+            "Ticket agent launched.",
+            "create-ticket",
+            { progress_note: `create ticket on ${tracker}` },
+          );
+        };
+        linBtn.addEventListener("click", () => pick("linear"));
+        ghBtn.addEventListener("click", () => pick("github"));
+      },
     });
-    actions.append(btn);
   }
 
   // 2) CI failing → fix-ci
   if (item.ci_status === "failure") {
-    const btn = document.createElement("button");
-    btn.className = "tm-action-btn";
-    btn.textContent = "🔧 Fix CI";
-    btn.addEventListener("click", () => {
-      if (launched) return;
-      launch(
-        dispatchPromptForItem(host, item, "fix-ci", {
-          title: `🔧 Fix CI on ${item.repo}#${item.identifier}`,
-        }),
-        "CI-fix agent launched.",
-        "fix-ci",
-        { progress_note: `fix CI on ${item.repo}#${item.identifier}` },
-      );
+    act.addButton({
+      key: "fix-ci",
+      label: "🔧 Fix CI",
+      okText: "CI-fix agent launched.",
+      title: `🔧 Fix CI on ${item.repo}#${item.identifier}`,
+      progressNote: `fix CI on ${item.repo}#${item.identifier}`,
     });
-    actions.append(btn);
   }
 
   // 3) Merge conflicts → resolve-conflicts
   if (item.mergeable === "conflicting") {
-    const btn = document.createElement("button");
-    btn.className = "tm-action-btn";
-    btn.textContent = "🔀 Resolve conflicts";
-    btn.addEventListener("click", () => {
-      if (launched) return;
-      launch(
-        dispatchPromptForItem(host, item, "resolve-conflicts", {
-          title: `🔀 Resolve merge conflicts on ${item.repo}#${item.identifier}`,
-        }),
-        "Conflict-resolver agent launched.",
-        "resolve-conflicts",
-        { progress_note: `resolve merge conflicts on ${item.repo}#${item.identifier}` },
-      );
+    act.addButton({
+      key: "resolve-conflicts",
+      label: "🔀 Resolve conflicts",
+      okText: "Conflict-resolver agent launched.",
+      title: `🔀 Resolve merge conflicts on ${item.repo}#${item.identifier}`,
+      progressNote: `resolve merge conflicts on ${item.repo}#${item.identifier}`,
     });
-    actions.append(btn);
   }
 
   // 4) Unresolved review threads → resolve-threads
   if (item.unresolved_threads > 0) {
-    const btn = document.createElement("button");
-    btn.className = "tm-action-btn";
-    btn.textContent = `💬 Resolve ${item.unresolved_threads} thread${item.unresolved_threads > 1 ? "s" : ""}`;
-    btn.addEventListener("click", () => {
-      if (launched) return;
-      launch(
-        dispatchPromptForItem(host, item, "resolve-threads", {
-          extraVars: { count_phrase: `are ${item.unresolved_threads}` },
-          title: `💬 Resolve review threads on ${item.repo}#${item.identifier}`,
-        }),
-        "Thread-resolver agent launched.",
-        "resolve-threads",
-        { progress_note: `resolve ${item.unresolved_threads} review threads on ${item.repo}#${item.identifier}` },
-      );
+    act.addButton({
+      key: "resolve-threads",
+      label: `💬 Resolve ${item.unresolved_threads} thread${item.unresolved_threads > 1 ? "s" : ""}`,
+      okText: "Thread-resolver agent launched.",
+      extraVars: { count_phrase: `are ${item.unresolved_threads}` },
+      title: `💬 Resolve review threads on ${item.repo}#${item.identifier}`,
+      progressNote: `resolve ${item.unresolved_threads} review threads on ${item.repo}#${item.identifier}`,
     });
-    actions.append(btn);
   }
 
-  if (actions.childElementCount > 0) {
-    actions.append(msg);
-    body.append(actions);
-  }
-
-  // Agent activity section: shows all conversations (current + history) for this PR
-  const activity = renderAgentActivity(item);
+  const activity = act.render();
+  if (act.el.childElementCount > 0) body.append(act.el);
   if (activity) body.append(activity);
 
   return row;

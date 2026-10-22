@@ -24,6 +24,29 @@ DEFAULT_SETS = {
                     ),
                 },
                 {
+                    "id": "investigate",
+                    "title": "Investigate",
+                    "body": (
+                        "Investigate {{title}} ({{url}}) and report findings only — do not "
+                        "implement changes yet.\n\n"
+                        "Source: {{source}}\n"
+                        "Identifier: {{identifier}}\n"
+                        "State: {{state}}\n"
+                        "Repo/Team: {{repo}}\n\n"
+                        "Steps:\n"
+                        "1. Read the issue/ticket body carefully (below) and identify the core "
+                        "problem or request.\n"
+                        "2. If this is a GitHub issue, check for any linked PRs, related issues, "
+                        "or project context. If it's a Linear ticket, check for sub-issues, "
+                        "parent context, and any GitHub links.\n"
+                        "3. Explore the relevant codebase to understand what would need to change "
+                        "and estimate the scope of work.\n"
+                        "4. Report: a summary of the issue, what you found in the codebase, the "
+                        "suggested approach, and a rough effort estimate.\n\n"
+                        "Issue/ticket body:\n{{body}}"
+                    ),
+                },
+                {
                     "id": "address-review",
                     "title": "Address review",
                     "body": (
@@ -153,12 +176,16 @@ DEFAULT_SETS = {
                         "per-action (e.g. {{tracker}} for create-ticket, {{count_phrase}} for "
                         "resolve-threads).\n\n"
                         "## How actions work\n\n"
-                        "An *action* is a button that appears on a PR row when a condition is "
-                        "met. The app's current actions:\n"
+                        "An *action* is a button that appears on a row (PR, review, or "
+                        "task/issue) when a condition is met. The app's current actions:\n"
                         "  - create-ticket:      shown when a PR has no linked issue\n"
                         "  - fix-ci:             shown when CI is failing\n"
                         "  - resolve-threads:    shown when there are unresolved review threads\n"
                         "  - resolve-conflicts:  shown when the PR has merge conflicts\n"
+                        "  - guided-review:      shown on pending review rows\n"
+                        "  - auto-review:        shown on pending review rows\n"
+                        "  - investigate:        shown on task/issue rows\n"
+                        "  - fix-issue:          shown on task/issue rows\n"
                         "  - prompt-helper:      launched from the Settings tab\n\n"
                         "Each action is mapped to a template via an *action_map* "
                         "(action_key → template_id). When the button is clicked, the mapped "
@@ -179,14 +206,17 @@ DEFAULT_SETS = {
                         "rows, in the ACTIONS constant in extension.js.\n"
                         "4. Add the action to the action_map: action_key → template_id.\n"
                         "5. Optionally set a profile_map entry for the action.\n"
-                        "6. If the action should appear as a button on PR rows, add it to the "
+                        "6. If the action should appear as a button on a row, add it to the "
                         "ACTIONS array in extension.js with a label, description, and a "
                         "condition under which it appears. Then add the button-rendering logic "
-                        "in the prRow() function.\n\n"
+                        "in the relevant row function (prRow, reviewRow, or taskRow). All row "
+                        "types use the shared createActionContainer() helper — call "
+                        "act.addButton({ key, label, okText, ... }) to add a button that "
+                        "automatically dispatches, tracks, and persists the conversation.\n\n"
                         "Templates do NOT have an 'applies to' or 'source filter' field. Which "
                         "item types an action applies to is determined entirely by the "
-                        "condition check in extension.js's prRow() function, not by anything "
-                        "in the template.\n\n"
+                        "condition check in the row function (prRow, reviewRow, or taskRow), "
+                        "not by anything in the template.\n\n"
                         "## Current prompt sets and templates\n\n"
                         "{{sets_json}}\n\n"
                         "## Your job\n\n"
@@ -194,8 +224,9 @@ DEFAULT_SETS = {
                         "the body text, choose a good id/title, and figure out the action "
                         "mapping. When we're happy, give me the final template in JSON format "
                         "(id, title, body) AND the action_map/profile_map entries needed to "
-                        "wire it up. If a new button should appear on PR rows, also give me "
-                        "the ACTIONS entry and the condition to add in prRow()."
+                        "wire it up. If a new button should appear on a row, also give me "
+                        "the ACTIONS entry and the act.addButton() call for the relevant row "
+                        "function (prRow, reviewRow, or taskRow)."
                     ),
                 },
                 {
@@ -287,6 +318,8 @@ DEFAULT_SETS = {
         "prompt-helper": "prompt-helper",
         "guided-review": "guided-review",
         "auto-review": "auto-review",
+        "investigate": "investigate",
+        "fix-issue": "fix-issue",
     },
     # action -> agent profile id (empty string = use the account's active profile)
     "profile_map": {
@@ -297,6 +330,8 @@ DEFAULT_SETS = {
         "prompt-helper": "",
         "guided-review": "",
         "auto-review": "",
+        "investigate": "",
+        "fix-issue": "",
     },
 }
 
