@@ -47,6 +47,9 @@ function mount(path = '', overrides = {}) {
     llms: overrides.llms ?? [{ name: 'existing-model', model: 'openai/gpt-5' }],
     secrets: overrides.secrets ?? [{ name: 'SHARED_TOKEN' }],
     mcps: overrides.mcps ?? { shared: { transport: 'streamable-http', url: 'https://example.org/mcp' } },
+    skills: overrides.skills ?? [{ name: 'code-review', origin: 'public', description: 'Review changes' }, { name: 'gitlab', origin: 'public', description: 'Work on GitLab' }],
+    plugins: overrides.plugins ?? [{ name: 'city-weather', description: 'Get weather', source: 'github:OpenHands/extensions', repo_path: 'plugins/city-weather', installed: false }],
+    installedPlugins: overrides.installedPlugins ?? [],
   };
   const host = {
     apiVersion: '1',
@@ -59,9 +62,16 @@ function mount(path = '', overrides = {}) {
         if (request.path === '/api/settings/secrets') return { secrets: state.secrets };
         if (request.path.startsWith('/api/settings/secrets?agent_profile_id=')) return { secrets: state.secrets };
         if (request.path === '/api/settings') return { agent_settings: { mcp_config: state.mcps } };
+        if (request.path === '/api/skills/catalog') return { skills: state.skills };
+        if (request.path === '/api/plugins/marketplace') return { plugins: state.plugins };
+        if (request.path === '/api/plugins/installed') return { plugins: state.installedPlugins };
         if (request.path.startsWith('/api/agent-profiles/')) return { profile: overrides.detail };
       }
       if (overrides.fail?.(request)) throw new Error('Server unavailable');
+      if (request.path === '/api/plugins/install') {
+        state.installedPlugins.push({ name: 'city-weather', source: request.body.source, repo_path: request.body.repo_path, enabled: true });
+        return { name: 'city-weather', enabled: true };
+      }
       if (request.method === 'POST' && request.path.startsWith('/api/agent-profiles/')) {
         state.profiles.push({ id: 'profile-uuid', name: decodeURIComponent(request.path.split('/').at(-1)), agent_kind: 'openhands' });
       }
@@ -209,5 +219,107 @@ test('launch uses only agent profile id as agent source', async () => {
   assert.deepEqual(launch.body.secrets, { SHARED_TOKEN: { kind: 'LookupSecret', url: '/api/settings/secrets/SHARED_TOKEN' } });
   assert.ok(app.calls.some((call) => call.path === '/api/settings/secrets?agent_profile_id=profile-uuid'));
   assert.deepEqual(app.navigation, ['/conversations/conversation-uuid']);
+  app.dispose();
+});
+
+test('MCP marketplace cards filter and fill a connection in the profile form', async () => {
+  const app = mount(); await tick();
+  button(app.container, 'Create profile').listeners.click(); await tick();
+  const search = input(app.container, 'Search MCP marketplace');
+  assert.ok(search);
+  assert.ok(button(app.container, 'Use DeepWiki'));
+  search.value = 'deepwiki'; search.listeners.input();
+  assert.ok(!button(app.container, 'Use GitHub'));
+  button(app.container, 'Use DeepWiki').listeners.click();
+  assert.equal(input(app.container, 'e.g. my-mcp').value, 'deepwiki');
+  assert.equal(input(app.container, 'https://example.com/mcp or command').value, 'https://mcp.deepwiki.com/mcp');
+  app.dispose();
+});
+
+test('skills marketplace controls the profile deny-list without losing unknown names', async () => {
+  const app = mount('', { profiles: [{ name: 'reviewer', id: 'profile-uuid', agent_kind: 'openhands' }],
+    detail: { name: 'reviewer', agent_kind: 'openhands', llm_profile_ref: 'existing-model', disabled_skills: ['legacy'] } });
+  await tick(); button(app.container, 'Edit').listeners.click(); await tick();
+  const checkbox = app.container.find((node) => node.tag === 'input' && node.type === 'checkbox' && node['aria-label'] === 'Enable code-review');
+  assert.ok(checkbox); checkbox.checked = false;
+  await app.container.find((node) => node.tag === 'form').listeners.submit({ preventDefault() {} });
+  const saved = app.calls.find((call) => call.path === '/api/agent-profiles/reviewer' && call.method === 'POST');
+  assert.deepEqual(saved.body.disabled_skills, ['legacy', 'code-review']);
+  app.dispose();
+});
+
+test('plugin marketplace installs explicitly and launch selection is conversation-scoped', async () => {
+  const app = mount(); await tick(); button(app.container, 'Create profile').listeners.click(); await tick();
+  assert.match(app.container.textContent, /Plugins are selected when launching/);
+  await button(app.container, 'Install city-weather').listeners.click();
+  const installed = app.calls.find((call) => call.path === '/api/plugins/install');
+  assert.deepEqual(installed.body, { source: 'github:OpenHands/extensions', repo_path: 'plugins/city-weather' });
+  app.dispose();
+  const launch = mount('/launch', { profiles: [{ name: 'reviewer', id: 'profile-uuid', agent_kind: 'openhands' }],
+    installedPlugins: [{ name: 'city-weather', enabled: true, source: 'github:OpenHands/extensions', repo_path: 'plugins/city-weather' }] });
+  await tick();
+  const check = launch.container.find((node) => node.tag === 'input' && node.type === 'checkbox' && node['aria-label'] === 'Attach city-weather');
+  assert.ok(check); check.checked = true;
+  launch.container.find((node) => node.tag === 'select').value = 'profile-uuid';
+  input(launch.container, '/absolute/path/to/workspace').value = '/workspace';
+  launch.container.find((node) => node.tag === 'textarea').value = 'Hello';
+  await button(launch.container, 'Launch conversation').listeners.click();
+  const request = launch.calls.find((call) => call.path === '/api/conversations');
+  assert.deepEqual(request.body.plugins, [{ source: 'github:OpenHands/extensions', repo_path: 'plugins/city-weather' }]);
+  launch.dispose();
+});
+
+test('marketplace MCP credentials are required and passed only to the server connection', async () => {
+  const app = mount(); await tick(); button(app.container, 'Create profile').listeners.click(); await tick();
+  button(app.container, 'Use GitHub').listeners.click();
+  input(app.container, 'e.g. code-review').value = 'reviewer';
+  app.container.find((node) => node.tag === 'select').value = 'existing-model';
+  await app.container.find((node) => node.tag === 'form').listeners.submit({ preventDefault() {} });
+  assert.match(app.container.textContent, /Complete each new resource/);
+  input(app.container, 'MCP access token').value = 'test-token';
+  await app.container.find((node) => node.tag === 'form').listeners.submit({ preventDefault() {} });
+  const connection = app.calls.find((call) => call.path === '/api/settings/mcp/github' && call.method === 'POST');
+  const profile = app.calls.find((call) => call.path === '/api/agent-profiles/reviewer' && call.method === 'POST');
+  assert.deepEqual(connection.body.auth, { strategy: 'api_key', value: 'test-token' });
+  assert.deepEqual(profile.body.mcp_server_refs, ['github']);
+  assert.doesNotMatch(JSON.stringify(profile.body), /test-token/);
+  app.dispose();
+});
+
+test('searching skills retains checkbox state across card remounts', async () => {
+  const app = mount(); await tick(); button(app.container, 'Create profile').listeners.click(); await tick();
+  const search = input(app.container, 'Search skills marketplace');
+  const enabled = app.container.find((node) => node['aria-label'] === 'Enable code-review');
+  enabled.checked = false;
+  search.value = 'gitlab'; search.listeners.input();
+  search.value = ''; search.listeners.input();
+  assert.equal(app.container.find((node) => node['aria-label'] === 'Enable code-review').checked, false);
+  app.dispose();
+});
+
+test('marketplace selects a configured MCP without duplicating it', async () => {
+  const app = mount('', { mcps: { deepwiki: { transport: 'streamable-http', url: 'https://mcp.deepwiki.com/mcp' } } });
+  await tick(); button(app.container, 'Create profile').listeners.click(); await tick();
+  button(app.container, 'Select DeepWiki').listeners.click();
+  input(app.container, 'e.g. code-review').value = 'reviewer';
+  app.container.find((node) => node.tag === 'select').value = 'existing-model';
+  await app.container.find((node) => node.tag === 'form').listeners.submit({ preventDefault() {} });
+  assert.ok(!app.calls.some((call) => call.path === '/api/settings/mcp/deepwiki' && call.method === 'POST'));
+  assert.deepEqual(app.calls.find((call) => call.path === '/api/agent-profiles/reviewer').body.mcp_server_refs, ['deepwiki']);
+  app.dispose();
+});
+
+test('advanced MCP marketplace cards require confirmation before leaving an unsaved form', async () => {
+  const app = mount(); await tick(); button(app.container, 'Create profile').listeners.click(); await tick();
+  const search = input(app.container, 'Search MCP marketplace');
+  search.value = 'slack'; search.listeners.input();
+  const go = button(app.container, 'Configure in Customize');
+  assert.ok(go);
+  const confirm = window.confirm;
+  window.confirm = () => false;
+  go.listeners.click(); assert.deepEqual(app.navigation, []);
+  window.confirm = () => true;
+  go.listeners.click(); assert.deepEqual(app.navigation, ['/mcp']);
+  window.confirm = confirm;
   app.dispose();
 });
