@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "agent-studio",
+  "display_name": "Agent Studio",
+  "version": "0.1.0",
+  "description": "Compose agent profiles in one form and launch conversations from them.",
+  "entrypoint": "extension.js",
+  "contributes": {
+    "pages": [{ "id": "studio", "title": "Agent Studio", "path": "/studio", "nav_label": "Agent Studio" }]
+  }
+}
